@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.TaskerBridgePhone" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#101312</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#5CF018</item>
+        <item name="android:windowSplashScreenBackground">#101312</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#101312</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+    </style>
+</resources>

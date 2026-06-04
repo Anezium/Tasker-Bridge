@@ -1,0 +1,14 @@
+.gradle/
+.gradle-user/
+.kotlin/
+build/
+**/build/
+local.properties
+secrets.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+*.iml
+.idea/
+/tasker-bridge-hud.png
