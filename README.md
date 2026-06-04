@@ -9,13 +9,13 @@
   <img src="https://img.shields.io/badge/Tasker-Automation-FF7A00" alt="Tasker automation" />
 </p>
 
-Tasker Bridge lets you launch your Android Tasker automations from a simple Rokid Glasses HUD. Install the phone APK, start the bridge, then pick and run your tasks directly from the glasses.
-
 <p align="center">
   <a href="https://ko-fi.com/M8R61ZTXMI" target="_blank">
     <img height="36" style="border:0px;height:36px;" src="https://storage.ko-fi.com/cdn/kofi4.png?v=6" border="0" alt="Buy Me a Coffee at ko-fi.com" />
   </a>
 </p>
+
+Tasker Bridge lets you launch your Android Tasker automations from a simple Rokid Glasses HUD. Install the phone APK, start the bridge, then pick and run your tasks directly from the glasses.
 
 <p align="center">
   <img src="assets/screenshots/phone.png" width="260" alt="Tasker Bridge phone app" />
