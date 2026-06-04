@@ -9,15 +9,13 @@
   <img src="https://img.shields.io/badge/Tasker-Automation-FF7A00" alt="Tasker automation" />
 </p>
 
-Android/Kotlin bridge for launching Tasker automations from a Rokid Glasses HUD.
+Tasker Bridge lets you launch your Android Tasker automations from a simple Rokid Glasses HUD. Install the phone APK, start the bridge, then pick and run your tasks directly from the glasses.
 
 <p align="center">
   <a href="https://ko-fi.com/M8R61ZTXMI" target="_blank">
     <img height="36" style="border:0px;height:36px;" src="https://storage.ko-fi.com/cdn/kofi4.png?v=6" border="0" alt="Buy Me a Coffee at ko-fi.com" />
   </a>
 </p>
-
-Tasker Bridge keeps Tasker on the phone, where it belongs, and puts only a tiny navigation HUD on the glasses. The phone app owns Hi Rokid authorization, CXR-L connection, Tasker access, helper APK upload/install, and task execution. The glasses helper renders a 480 x 640 AR-safe list and sends launch requests back to the phone.
 
 <p align="center">
   <img src="assets/screenshots/phone.png" width="260" alt="Tasker Bridge phone app" />
