@@ -64,8 +64,10 @@ android {
 
     buildTypes {
         release {
-            if (hasReleaseSigning) {
-                signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
             }
         }
     }
@@ -75,8 +77,7 @@ android {
         val helperApkAssetsDir = layout.buildDirectory.dir("generated/assets/glasses-helper/$buildTypeName").get().asFile
         val helperApkName = when {
             buildTypeName == "debug" -> "glasses-helper-debug.apk"
-            hasReleaseSigning -> "glasses-helper-release.apk"
-            else -> "glasses-helper-release-unsigned.apk"
+            else -> "glasses-helper-release.apk"
         }
         sourceSets.getByName(buildTypeName).assets.srcDir(helperApkAssetsDir)
         val copyHelperApk = tasks.register<Copy>("copyGlassesHelper${variantName}Apk") {

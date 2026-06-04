@@ -115,11 +115,21 @@ Use the local isolated Gradle home if the global Kotlin DSL cache is stale:
 .\gradlew.bat --gradle-user-home .gradle-user --no-daemon :phone-app:assembleDebug
 ```
 
+For a GitHub release APK:
+
+```powershell
+.\gradlew.bat --gradle-user-home .gradle-user --no-daemon :phone-app:assembleRelease
+```
+
+If no release signing secrets are configured, the release variant falls back to the Android debug signing config so the APK remains installable for sideloading.
+
 Outputs:
 
 ```text
 phone-app/build/outputs/apk/debug/phone-app-debug.apk
+phone-app/build/outputs/apk/release/phone-app-release.apk
 glasses-helper/build/outputs/apk/debug/glasses-helper-debug.apk
+glasses-helper/build/outputs/apk/release/glasses-helper-release.apk
 ```
 
 The phone build automatically embeds the helper as:
