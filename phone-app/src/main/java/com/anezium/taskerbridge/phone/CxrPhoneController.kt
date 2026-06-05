@@ -10,25 +10,28 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
 import android.util.Log
-import com.anezium.taskerbridge.shared.ControlMessage
-import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
-import com.anezium.taskerbridge.shared.StatusMessage
-import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk
-import com.rokid.cxr.link.callbacks.ICustomCmdCbk
 import com.rokid.cxr.link.callbacks.IGlassAppCbk
 import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import java.io.File
 
+data class HelperApkInfo(
+    val packageName: String,
+    val versionCode: Long,
+    val versionName: String,
+) {
+    val label: String
+        get() = "$versionName ($versionCode)"
+}
+
 class CxrPhoneController(
     private val context: Context,
     private val onAuthorized: (Boolean) -> Unit,
     private val onConnectionChanged: (cxr: Boolean, bt: Boolean) -> Unit,
-    private val onHelperMessage: (StatusMessage) -> Unit,
     private val onInstallStatus: (message: String, busy: Boolean) -> Unit,
     private val onHelperInstalled: (Boolean) -> Unit = {},
     private val onHelperOpened: (Boolean) -> Unit = {},
@@ -41,7 +44,10 @@ class CxrPhoneController(
     private var token: String = prefs.getString(KEY_AUTH_TOKEN, "").orEmpty()
     private var link: CXRLink? = null
     private var pendingInstallApk: File? = null
+    private var pendingInstallInfo: HelperApkInfo? = null
+    private var pendingForceReinstall = false
     private var installStarted = false
+    private var uninstallStarted = false
 
     private val linkCallback = object : ICXRLinkCbk {
         override fun onCXRLConnected(connected: Boolean) {
@@ -62,28 +68,20 @@ class CxrPhoneController(
         override fun onGlassAiAssistStop() = Unit
     }
 
-    private val commandCallback = object : ICustomCmdCbk {
-        override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
-            if (key != Protocol.STATUS_CHANNEL || payload == null) return
-            runCatching {
-                val caps = Caps.fromBytes(payload)
-                val raw = caps.readStringPairPayload() ?: return
-                val message = JsonProtocol.decodeStatus(raw)
-                Log.d(TAG, "received helper status ${message.type}")
-                onHelperMessage(message)
-            }.onFailure {
-                onError("Failed to parse glasses helper message", it)
-            }
-        }
-    }
-
     private val appCallback = object : IGlassAppCbk {
         override fun onInstallAppResult(success: Boolean) {
+            val installedInfo = pendingInstallInfo
             installStarted = false
+            uninstallStarted = false
+            pendingForceReinstall = false
             pendingInstallApk?.delete()
             pendingInstallApk = null
+            pendingInstallInfo = null
             val message = if (success) {
-                "Helper installed on glasses."
+                installedInfo?.let { info ->
+                    rememberInstalledHelper(info)
+                    "Helper ${info.label} installed on glasses."
+                } ?: "Helper installed on glasses."
             } else {
                 "Helper install failed. Check Hi Rokid and retry."
             }
@@ -106,12 +104,40 @@ class CxrPhoneController(
         override fun onQueryAppResult(installed: Boolean) = onLog("Helper installed: $installed")
     }
 
+    private val reinstallCallback = object : IGlassAppCbk {
+        override fun onInstallAppResult(success: Boolean) = Unit
+
+        override fun onUnInstallAppResult(success: Boolean) {
+            onLog("Helper uninstall before reinstall: $success")
+            pendingForceReinstall = false
+            uninstallStarted = false
+            installStarted = false
+            maybeUploadPendingHelper()
+        }
+
+        override fun onOpenAppResult(success: Boolean) = Unit
+        override fun onStopAppResult(success: Boolean) = Unit
+        override fun onGlassAppResume(resumed: Boolean) = Unit
+        override fun onQueryAppResult(installed: Boolean) = Unit
+    }
+
     fun isRequiredRokidAppInstalled(context: Context): Boolean =
         isGlobalHiRokidInstalled(context)
 
     fun isAuthorized(): Boolean = token.isNotBlank()
 
     fun isConnected(): Boolean = cxrConnected || btConnected
+
+    fun bundledHelperVersionLabel(): String =
+        readBundledHelperInfo()?.label ?: "unknown"
+
+    fun lastInstalledHelperVersionLabel(): String =
+        prefs.getString(KEY_HELPER_INSTALLED_VERSION_NAME, null)
+            ?.let { versionName ->
+                val versionCode = prefs.getLong(KEY_HELPER_INSTALLED_VERSION_CODE, -1L)
+                if (versionCode >= 0) "$versionName ($versionCode)" else versionName
+            }
+            ?: "none recorded"
 
     fun requestAuthorization(activity: Activity, requestCode: Int) {
         if (!isGlobalHiRokidInstalled(activity)) {
@@ -163,6 +189,7 @@ class CxrPhoneController(
             onError("Turn on phone Wi-Fi first. Hi Rokid uses it for CXR-L install.", null)
             return
         }
+        disconnect()
         val nextLink = CXRLink(context).apply {
             configCXRSession(
                 CxrDefs.CXRSession(
@@ -171,7 +198,6 @@ class CxrPhoneController(
                 ),
             )
             setCXRLinkCbk(linkCallback)
-            setCXRCustomCmdCbk(commandCallback)
         }
         link = nextLink
         cxrConnected = false
@@ -185,8 +211,17 @@ class CxrPhoneController(
         }
     }
 
-    fun installHelper() {
-        onInstallStatus("Preparing helper APK...", true)
+    fun disconnect() {
+        runCatching { link?.disconnect() }
+            .onFailure { Log.w(TAG, "CXR-L disconnect failed", it) }
+        link = null
+        cxrConnected = false
+        btConnected = false
+        onConnectionChanged(false, false)
+    }
+
+    fun installHelper(forceReinstall: Boolean = false) {
+        onInstallStatus("Preparing bundled helper APK...", true)
         if (token.isBlank()) {
             val message = "Authorize Rokid before installing the helper."
             onInstallStatus(message, false)
@@ -203,22 +238,29 @@ class CxrPhoneController(
             onError(message, null)
             return
         }
-        val packageName = runCatching { readPackageName(apk) }.getOrElse {
+        val helperInfo = runCatching { readHelperApkInfo(apk) }.getOrElse {
             val message = "Could not read helper APK."
             onInstallStatus(message, false)
             onError(message, it)
             return
         }
-        if (packageName != Protocol.HELPER_PACKAGE) {
-            val message = "Bundled helper package mismatch: $packageName"
+        if (helperInfo.packageName != Protocol.HELPER_PACKAGE) {
+            val message = "Bundled helper package mismatch: ${helperInfo.packageName}"
             onInstallStatus(message, false)
             onError(message, null)
             return
         }
         pendingInstallApk = apk
+        pendingInstallInfo = helperInfo
+        pendingForceReinstall = forceReinstall
         installStarted = false
+        uninstallStarted = false
         val message = if (cxrConnected && btConnected) {
-            "Uploading helper APK to glasses..."
+            if (forceReinstall) {
+                "Reinstalling helper ${helperInfo.label} on glasses..."
+            } else {
+                "Uploading helper ${helperInfo.label} to glasses..."
+            }
         } else {
             "Waiting for CXR-L and Bluetooth before install..."
         }
@@ -250,8 +292,14 @@ class CxrPhoneController(
                 override fun onQueryAppResult(installed: Boolean) {
                     onLog("Helper installed: $installed")
                     if (installed) {
-                        onInstallStatus("Helper already installed. Opening HUD...", true)
-                        launchHelper()
+                        val bundled = readBundledHelperInfo()
+                        if (bundled != null && shouldRefreshInstalledHelper(bundled)) {
+                            onInstallStatus("Helper update needed: bundled ${bundled.label}.", true)
+                            installHelper(forceReinstall = true)
+                        } else {
+                            onInstallStatus("Helper current. Opening HUD...", true)
+                            launchHelper()
+                        }
                     } else {
                         installHelper()
                     }
@@ -278,43 +326,6 @@ class CxrPhoneController(
         link?.appStop(appCallback) ?: onError("CXR-L is not connected.", null)
     }
 
-    fun sendTaskList(message: ControlMessage.TaskList) {
-        sendControl(message)
-    }
-
-    fun sendLaunchResult(message: ControlMessage.LaunchResult) {
-        sendControl(message)
-    }
-
-    fun sendStatus(message: String, urgent: Boolean = false) {
-        sendControl(ControlMessage.SetStatus(message, urgent))
-    }
-
-    private fun sendControl(message: ControlMessage) {
-        val activeLink = link
-        if (activeLink == null || (!cxrConnected && !btConnected)) {
-            Log.d(TAG, "skip sendControl ${message.type}: CXR-L not ready")
-            return
-        }
-        val raw = JsonProtocol.encodeControl(message)
-        val caps = Caps().apply {
-            write("json")
-            write(raw)
-        }
-        runCatching {
-            activeLink.sendCustomCmd(Protocol.CONTROL_CHANNEL, caps.serialize())
-        }.onSuccess { result ->
-            Log.d(TAG, "sendControl ${message.type}: $result")
-            onLog("Sent ${message.type}")
-        }.onFailure { error ->
-            Log.w(TAG, "sendControl ${message.type} failed", error)
-            onError("CXR-L command send failed. Reconnecting...", error)
-            cxrConnected = false
-            btConnected = false
-            onConnectionChanged(false, false)
-        }
-    }
-
     private fun helperApkCandidates(): List<File> {
         val appContext = context.applicationContext
         return listOfNotNull(
@@ -339,8 +350,22 @@ class CxrPhoneController(
         val apk = pendingInstallApk ?: return
         val activeLink = link ?: return
         if (installStarted || !cxrConnected || !btConnected) return
+        if (pendingForceReinstall && !uninstallStarted) {
+            uninstallStarted = true
+            onInstallStatus("Removing old helper before reinstall...", true)
+            runCatching {
+                activeLink.appUninstall(reinstallCallback)
+            }.onFailure {
+                onLog("Helper uninstall failed; uploading anyway.")
+                pendingForceReinstall = false
+                uninstallStarted = false
+                maybeUploadPendingHelper()
+            }
+            return
+        }
         installStarted = true
-        onInstallStatus("Uploading helper APK to glasses...", true)
+        val label = pendingInstallInfo?.label.orEmpty()
+        onInstallStatus("Uploading helper $label to glasses...".trim(), true)
         runCatching {
             activeLink.appUploadAndInstall(apk.absolutePath, appCallback)
         }.onFailure {
@@ -398,20 +423,47 @@ class CxrPhoneController(
         return wifiManager?.isWifiEnabled == true
     }
 
-    private fun readPackageName(apkFile: File): String {
+    private fun readBundledHelperInfo(): HelperApkInfo? {
+        val apk = extractBundledHelperApk() ?: return null
+        return runCatching { readHelperApkInfo(apk) }
+            .also { apk.delete() }
+            .getOrNull()
+    }
+
+    private fun readHelperApkInfo(apkFile: File): HelperApkInfo {
         @Suppress("DEPRECATION")
         val info = context.packageManager.getPackageArchiveInfo(
             apkFile.absolutePath,
             PackageManager.GET_ACTIVITIES,
         )
-        return info?.packageName?.takeIf { it.isNotBlank() }
+        val packageName = info?.packageName?.takeIf { it.isNotBlank() }
             ?: error("Cannot read helper APK package name")
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
+        return HelperApkInfo(
+            packageName = packageName,
+            versionCode = versionCode,
+            versionName = info.versionName ?: "unknown",
+        )
     }
 
-    private fun Caps.readStringPairPayload(): String? {
-        if (size() == 0) return null
-        if (size() == 1) return at(0).string
-        return at(1).string ?: at(0).string
+    private fun shouldRefreshInstalledHelper(bundled: HelperApkInfo): Boolean {
+        val installedVersionCode = prefs.getLong(KEY_HELPER_INSTALLED_VERSION_CODE, -1L)
+        val installedPackage = prefs.getString(KEY_HELPER_INSTALLED_PACKAGE, "").orEmpty()
+        return installedPackage != bundled.packageName || installedVersionCode != bundled.versionCode
+    }
+
+    private fun rememberInstalledHelper(info: HelperApkInfo) {
+        prefs.edit()
+            .putString(KEY_HELPER_INSTALLED_PACKAGE, info.packageName)
+            .putLong(KEY_HELPER_INSTALLED_VERSION_CODE, info.versionCode)
+            .putString(KEY_HELPER_INSTALLED_VERSION_NAME, info.versionName)
+            .putLong(KEY_HELPER_INSTALLED_AT_MS, System.currentTimeMillis())
+            .apply()
     }
 
     companion object {
@@ -419,6 +471,10 @@ class CxrPhoneController(
         private const val TAG = "TaskerBridge-CXRL"
         private const val PREFS_NAME = "cxr_l_auth"
         private const val KEY_AUTH_TOKEN = "auth_token"
+        private const val KEY_HELPER_INSTALLED_PACKAGE = "helper_installed_package"
+        private const val KEY_HELPER_INSTALLED_VERSION_CODE = "helper_installed_version_code"
+        private const val KEY_HELPER_INSTALLED_VERSION_NAME = "helper_installed_version_name"
+        private const val KEY_HELPER_INSTALLED_AT_MS = "helper_installed_at_ms"
         private const val GLOBAL_AI_APP_PACKAGE = "com.rokid.sprite.global.aiapp"
         private const val AUTH_ACTIVITY_CLASS = "com.rokid.sprite.aiapp.externalapp.auth.AuthorizationActivity"
         private const val AUTH_ACTION = "com.rokid.sprite.aiapp.externalapp.AUTHORIZATION"

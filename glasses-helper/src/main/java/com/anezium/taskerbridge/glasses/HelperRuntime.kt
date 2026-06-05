@@ -1,10 +1,11 @@
 package com.anezium.taskerbridge.glasses
 
+import android.content.Context
 import android.os.SystemClock
 import com.anezium.taskerbridge.shared.ControlMessage
-import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.anezium.taskerbridge.shared.StatusType
+import com.anezium.taskerbridge.shared.TaskerTask
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,9 +18,17 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 
-class HelperRuntime private constructor() {
+class HelperRuntime private constructor(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private lateinit var bridge: CxrBridgeController
+    private val appContext = context.applicationContext
+    private val bridge = BluetoothBridgeClient(
+        context = appContext,
+        onState = { state -> onMain { handleBluetoothState(state) } },
+        onMessage = { message -> onMain { handleControlMessage(message) } },
+        onLog = { message -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
+        onError = { message, _ -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
+    )
+
     private var started = false
     private var taskListReceived = false
     private var taskRequestRetryJob: Job? = null
@@ -30,59 +39,85 @@ class HelperRuntime private constructor() {
     val state: StateFlow<HelperUiState> = _state.asStateFlow()
 
     fun start() {
-        if (started) {
-            requestTasks()
-            return
+        if (!started) {
+            started = true
+            bridge.start()
         }
-        started = true
-        bridge = CxrBridgeController(
-            onControlMessage = ::handleControlMessage,
-            onBridgeState = { message -> _state.value = _state.value.copy(bridgeState = message) },
-            onPhoneAvailable = ::requestTasks,
-        )
-        bridge.start()
         requestTasks("HUD opened")
     }
 
-    fun stop() {
+    fun close() {
         taskRequestRetryJob?.cancel()
-        if (::bridge.isInitialized) {
-            bridge.sendStatus(StatusMessage(StatusType.READY, "Helper closing"))
+        scope.launch {
+            bridge.send(StatusMessage(StatusType.READY, "Helper closing"))
+            bridge.stop()
+            started = false
         }
     }
 
     fun resume() {
-        if (::bridge.isInitialized) {
-            requestTasks()
-        }
+        start()
     }
 
     fun nextTask() {
-        val current = _state.value
-        if (current.tasks.isEmpty()) return
-        val next = (current.selectedIndex + 1).coerceAtMost(current.tasks.lastIndex)
-        updateSelection(next)
+        moveMenuSelection(1)
     }
 
     fun previousTask() {
-        val current = _state.value
-        if (current.tasks.isEmpty()) return
-        val next = (current.selectedIndex - 1).coerceAtLeast(0)
-        updateSelection(next)
+        moveMenuSelection(-1)
     }
 
     fun launchSelectedTask() {
         val current = _state.value
-        val task = current.tasks.getOrNull(current.selectedIndex) ?: return
-        _state.value = current.copy(status = "Requesting ${task.name}", lastLaunchTask = task.name, lastLaunchSuccess = null)
-        bridge.sendStatus(
-            StatusMessage(
-                type = StatusType.LAUNCH_TASK,
-                taskName = task.name,
-                selectedIndex = current.selectedIndex,
-                message = "Launch requested",
-            ),
+        if (current.tasks.isEmpty()) return
+        when (current.viewMode) {
+            HelperViewMode.PROJECTS -> enterProjectAt(current.menuModel().safeProjectIndex)
+            HelperViewMode.TASKS -> launchTaskAt(current.menuModel().selectedTaskIndex)
+        }
+    }
+
+    fun selectProjectAt(index: Int) {
+        val current = _state.value
+        if (current.viewMode != HelperViewMode.PROJECTS || current.tasks.isEmpty()) return
+        applyMenuSelection(
+            selection = current.menuModel().selectProject(index),
+            notifyTaskSelection = false,
         )
+    }
+
+    fun activateProjectAt(index: Int) {
+        val current = _state.value
+        if (current.tasks.isEmpty()) return
+        enterProjectAt(index)
+    }
+
+    fun selectTaskAt(index: Int) {
+        val current = _state.value
+        if (current.viewMode != HelperViewMode.TASKS || current.tasks.isEmpty()) return
+        applyMenuSelection(
+            selection = current.menuModel().selectTask(index),
+            notifyTaskSelection = true,
+        )
+    }
+
+    fun launchTaskAt(index: Int) {
+        val current = _state.value
+        val selection = current.menuModel().selectTask(index)
+        val task = current.tasks.getOrNull(selection.selectedIndex) ?: return
+        _state.value = current.applyMenuSelection(selection).copy(
+            status = "Requesting ${task.name}",
+            lastLaunchTask = task.name,
+            lastLaunchSuccess = null,
+        )
+        sendLaunchRequest(task, selection.selectedIndex)
+    }
+
+    fun navigateBack(): Boolean {
+        val current = _state.value
+        if (current.viewMode != HelperViewMode.TASKS) return false
+        val selection = current.menuModel().backToProjects()
+        _state.value = current.applyMenuSelection(selection).copy(status = current.projectListStatus())
+        return true
     }
 
     fun requestTasks(reason: String = "Refresh requested") {
@@ -93,15 +128,73 @@ class HelperRuntime private constructor() {
         beginTaskRequestRetry()
     }
 
-    private fun updateSelection(index: Int) {
+    private fun handleBluetoothState(state: BluetoothClientState) {
+        val wasConnected = _state.value.phoneConnected
+        _state.value = _state.value.copy(
+            phoneConnected = state.connected,
+            phoneName = state.peerName,
+            bridgeState = state.status,
+        )
+        if (state.connected && !wasConnected) {
+            sendStatus(StatusMessage(StatusType.READY, "Helper ready over Bluetooth"))
+            requestTasks("Bluetooth connected")
+        }
+    }
+
+    private fun sendLaunchRequest(
+        task: TaskerTask,
+        selectedIndex: Int,
+    ) {
+        sendStatus(
+            StatusMessage(
+                type = StatusType.LAUNCH_TASK,
+                taskName = task.name,
+                selectedIndex = selectedIndex,
+                message = "Launch requested",
+            ),
+        )
+    }
+
+    private fun moveMenuSelection(delta: Int) {
         val current = _state.value
-        val safeIndex = index.coerceIn(0, max(0, current.tasks.lastIndex))
-        val task = current.tasks.getOrNull(safeIndex)
-        _state.value = current.copy(selectedIndex = safeIndex)
-        bridge.sendStatus(
+        if (current.tasks.isEmpty() || current.menuModel().rowCount == 0) return
+        applyMenuSelection(
+            selection = current.menuModel().move(delta),
+            notifyTaskSelection = current.viewMode == HelperViewMode.TASKS,
+        )
+    }
+
+    private fun enterProjectAt(index: Int) {
+        val current = _state.value
+        val model = current.menuModel()
+        if (model.projects.isEmpty()) return
+        applyMenuSelection(
+            selection = model.enterProject(index),
+            notifyTaskSelection = true,
+        )
+    }
+
+    private fun applyMenuSelection(
+        selection: HudMenuSelection,
+        notifyTaskSelection: Boolean,
+    ) {
+        val current = _state.value
+        val next = current.applyMenuSelection(selection)
+        _state.value = next.copy(status = next.menuStatus())
+        if (notifyTaskSelection && selection.viewMode == HelperViewMode.TASKS) {
+            val selected = next.menuModel().selectedTask()
+            sendSelectionChanged(selected?.index ?: 0, selected?.task?.name.orEmpty())
+        }
+    }
+
+    private fun sendSelectionChanged(
+        safeIndex: Int,
+        taskName: String,
+    ) {
+        sendStatus(
             StatusMessage(
                 type = StatusType.SELECTION_CHANGED,
-                taskName = task?.name.orEmpty(),
+                taskName = taskName,
                 selectedIndex = safeIndex,
                 message = "Selection changed",
             ),
@@ -112,6 +205,9 @@ class HelperRuntime private constructor() {
         when (message) {
             is ControlMessage.Hello -> {
                 _state.value = _state.value.copy(status = "Phone connected")
+            }
+            is ControlMessage.Unknown -> {
+                _state.value = _state.value.copy(status = "Ignored unknown phone message")
             }
             is ControlMessage.TaskList -> {
                 taskListReceived = true
@@ -130,9 +226,26 @@ class HelperRuntime private constructor() {
                     max(0, preservedIndex ?: safeMessageIndex),
                     max(0, message.tasks.lastIndex),
                 )
+                val projects = message.tasks.taskProjects()
+                val selectedProjectName = message.tasks.getOrNull(selected)?.projectGroupName().orEmpty()
+                val preferredProjectName = current.selectedProjectName.takeIf { name ->
+                    projects.any { it.name == name }
+                } ?: selectedProjectName
+                val projectIndex = projects.projectIndexFor(preferredProjectName)
+                val viewMode = if (
+                    current.viewMode == HelperViewMode.TASKS &&
+                    projects.getOrNull(projectIndex)?.name == preferredProjectName
+                ) {
+                    HelperViewMode.TASKS
+                } else {
+                    HelperViewMode.PROJECTS
+                }
                 _state.value = current.copy(
                     tasks = message.tasks,
                     selectedIndex = selected,
+                    viewMode = viewMode,
+                    selectedProjectIndex = projectIndex,
+                    selectedProjectName = projects.getOrNull(projectIndex)?.name.orEmpty(),
                     taskerInstalled = message.taskerInstalled,
                     taskerEnabled = message.taskerEnabled,
                     externalAccess = message.externalAccess,
@@ -152,7 +265,7 @@ class HelperRuntime private constructor() {
                 _state.value = _state.value.copy(status = message.message)
             }
             is ControlMessage.Ping -> {
-                bridge.sendStatus(StatusMessage(StatusType.PONG, message.nonce))
+                sendStatus(StatusMessage(StatusType.PONG, message.nonce))
             }
         }
     }
@@ -172,19 +285,33 @@ class HelperRuntime private constructor() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastTaskRequestAtMs < TASK_REQUEST_MIN_INTERVAL_MS) return
         lastTaskRequestAtMs = now
-        val result = bridge.sendStatus(StatusMessage(StatusType.REQUEST_TASKS, reason))
-        if (result == CxrBridgeController.BRIDGE_PHONE_NOT_READY) {
-            _state.value = _state.value.copy(bridgeState = "Listening for phone push")
+        sendStatus(StatusMessage(StatusType.REQUEST_TASKS, reason)) {
+            _state.value = _state.value.copy(bridgeState = "Waiting for phone Bluetooth")
         }
+    }
+
+    private fun sendStatus(
+        message: StatusMessage,
+        onNotSent: (() -> Unit)? = null,
+    ) {
+        scope.launch {
+            if (!bridge.send(message)) {
+                onNotSent?.invoke()
+            }
+        }
+    }
+
+    private fun onMain(block: () -> Unit) {
+        scope.launch(Dispatchers.Main.immediate) { block() }
     }
 
     companion object {
         @Volatile
         private var instance: HelperRuntime? = null
 
-        fun get(): HelperRuntime {
+        fun get(context: Context): HelperRuntime {
             return instance ?: synchronized(this) {
-                instance ?: HelperRuntime().also { instance = it }
+                instance ?: HelperRuntime(context.applicationContext).also { instance = it }
             }
         }
 
@@ -192,4 +319,21 @@ class HelperRuntime private constructor() {
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
         private val REQUEST_RETRY_DELAYS_MS = longArrayOf(1_500L, 3_500L, 7_000L)
     }
+}
+
+private fun HelperUiState.menuStatus(): String {
+    val model = menuModel()
+    return when (viewMode) {
+        HelperViewMode.PROJECTS -> {
+            model.selectedProject
+                ?.let { "${it.displayName}: ${it.taskIndices.size} tasks" }
+                ?: projectListStatus()
+        }
+        HelperViewMode.TASKS -> "Ready"
+    }
+}
+
+private fun HelperUiState.projectListStatus(): String {
+    val count = menuModel().projects.size
+    return if (count == 1) "1 project" else "$count projects"
 }

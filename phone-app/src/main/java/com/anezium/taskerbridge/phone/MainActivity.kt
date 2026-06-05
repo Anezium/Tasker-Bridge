@@ -9,7 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +18,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.anezium.taskerbridge.shared.TaskerTask
 
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: BridgeRuntime
@@ -55,16 +55,17 @@ class MainActivity : ComponentActivity() {
 
         runtime = BridgeRuntime.get(applicationContext)
         runtime.start()
-        requestPermissionsThenAutoStart()
+        requestPermissionsThenStartService()
 
         setContent {
             val state by runtime.state.collectAsState()
             PhoneScreen(
                 state = state,
-                onStartBridge = { runtime.startBridgeFromUi(this) },
-                onLaunchHelper = { runtime.launchHelper() },
-                onSelectTask = { index -> runtime.selectTask(index) },
-                onRunTask = { taskName -> runtime.runTaskFromPhone(taskName) },
+                onStartService = { startForegroundBridge() },
+                onRefreshTasker = { runtime.refreshTasker(sendToGlasses = state.bluetoothConnected) },
+                onInstallHud = { runtime.installHudFromUi(this) },
+                onLaunchHud = { runtime.launchHudFromUi(this) },
+                onForgetBluetoothPairing = { runtime.forgetBluetoothPairing() },
             )
         }
     }
@@ -85,11 +86,10 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSIONS_REQUEST_CODE) {
             startForegroundBridge()
-            runtime.autoStartFromActivity(this)
         }
     }
 
-    private fun requestPermissionsThenAutoStart() {
+    private fun requestPermissionsThenStartService() {
         val missing = requiredPermissions().filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
         }
@@ -98,7 +98,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         startForegroundBridge()
-        runtime.autoStartFromActivity(this)
     }
 
     private fun startForegroundBridge() {
@@ -113,10 +112,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PhoneScreen(
     state: PhoneUiState,
-    onStartBridge: () -> Unit,
-    onLaunchHelper: () -> Unit,
-    onSelectTask: (Int) -> Unit,
-    onRunTask: (String) -> Unit,
+    onStartService: () -> Unit,
+    onRefreshTasker: () -> Unit,
+    onInstallHud: () -> Unit,
+    onLaunchHud: () -> Unit,
+    onForgetBluetoothPairing: () -> Unit,
 ) {
     MaterialTheme(
         colorScheme = darkColorScheme(
@@ -140,27 +140,44 @@ private fun PhoneScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     ErrorBanner(state.error)
-                    Section("Bridge") {
-                        StatusRow("Service", if (state.bridgeServiceActive) "foreground" else "starting", state.bridgeServiceActive)
+
+                    Section("Glasses HUD") {
                         StatusRow("Hi Rokid", if (state.requiredRokidAppInstalled) "installed" else "missing", state.requiredRokidAppInstalled)
-                        StatusRow("Authorization", if (state.authorized) "ready" else "needed", state.authorized)
-                        StatusRow("CXR-L", if (state.cxrConnected) "connected" else "connecting", state.cxrConnected)
-                        StatusRow("Glasses BT", if (state.glassBtConnected) "connected" else "waiting", state.glassBtConnected)
-                        BridgeButton("Start bridge", state.requiredRokidAppInstalled, onStartBridge)
-                        OutlinedBridgeButton("Launch HUD", state.cxrConnected || state.glassBtConnected, onLaunchHelper)
+                        StatusRow("Authorization", if (state.authorized) "saved" else "needed", state.authorized)
+                        StatusRow("Setup link", state.setupLinkLabel(), state.cxrConnected || state.glassBtConnected)
+                        StatusRow("Bundled version", state.helperBundledVersion, state.helperBundledVersion != "unknown")
                         SmallText(state.helperInstallStatus)
+                        BridgeButton(
+                            "Install HUD",
+                            state.requiredRokidAppInstalled && !state.helperInstallBusy,
+                            onInstallHud,
+                        )
+                        OutlinedBridgeButton(
+                            "Launch HUD",
+                            state.requiredRokidAppInstalled && !state.helperInstallBusy,
+                            onLaunchHud,
+                        )
+                    }
+
+                    Section("Phone Bridge") {
+                        StatusRow("Background service", if (state.bridgeServiceActive) "running" else "stopped", state.bridgeServiceActive)
+                        StatusRow("Bluetooth", if (state.bluetoothServerActive) "ready" else "off", state.bluetoothServerActive)
+                        StatusRow("Pairing", state.bluetoothPairingLabel(), state.bluetoothPaired)
+                        StatusRow("HUD connection", state.bluetoothHudLabel(), state.bluetoothConnected)
+                        SmallText(state.bluetoothStatus.ifBlank { state.lastStatus })
+                        OutlinedBridgeButton("Start background bridge", true, onStartService)
+                        OutlinedBridgeButton(
+                            "Forget Bluetooth pairing",
+                            state.bluetoothPaired || state.bluetoothConnected,
+                            onForgetBluetoothPairing,
+                        )
                     }
 
                     Section("Tasker") {
-                        StatusRow("Tasker", state.taskerStatusLabel(), state.taskerReady())
-                        SmallText("HUD refreshes on open or resume. ${state.lastStatus}")
-                        TaskList(
-                            tasks = state.tasks,
-                            selectedIndex = state.selectedIndex,
-                            helperSelectedIndex = state.helperSelectedIndex,
-                            onSelectTask = onSelectTask,
-                            onRunTask = onRunTask,
-                        )
+                        StatusRow("Access", state.taskerStatusLabel(), state.taskerReady())
+                        SmallText(state.lastStatus)
+                        OutlinedBridgeButton("Refresh Tasker", true, onRefreshTasker)
+                        TaskList(tasks = state.tasks)
                     }
                 }
             }
@@ -253,54 +270,40 @@ private fun StatusRow(label: String, value: String, ok: Boolean) {
             color = if (ok) BridgeGreen else BridgeAmber,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
-private fun TaskList(
-    tasks: List<com.anezium.taskerbridge.shared.TaskerTask>,
-    selectedIndex: Int,
-    helperSelectedIndex: Int,
-    onSelectTask: (Int) -> Unit,
-    onRunTask: (String) -> Unit,
-) {
+private fun TaskList(tasks: List<TaskerTask>) {
     if (tasks.isEmpty()) {
         SmallText("No named Tasker tasks found.")
         return
     }
     Column(
-        modifier = Modifier.heightIn(max = 420.dp),
+        modifier = Modifier.heightIn(max = 360.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        tasks.take(32).forEachIndexed { index, task ->
-            val selected = index == selectedIndex
-            val helperSelected = index == helperSelectedIndex
-            Row(
+        tasks.take(48).forEach { task ->
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(if (selected) PhoneSelected else Color.Transparent, RowShape)
-                    .border(1.dp, if (helperSelected) BridgeGreen else PhoneBorder, RowShape)
-                    .clickable { onSelectTask(index) }
+                    .border(1.dp, PhoneBorder, RowShape)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        task.name,
-                        color = PhoneText,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (task.projectName.isNotBlank()) {
-                        Text(task.projectName, color = PhoneMuted, fontSize = 12.sp, maxLines = 1)
-                    }
-                }
-                OutlinedButton(onClick = { onRunTask(task.name) }) {
-                    Text("Run")
+                Text(
+                    task.name,
+                    color = PhoneText,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (task.projectName.isNotBlank()) {
+                    Text(task.projectName, color = PhoneMuted, fontSize = 12.sp, maxLines = 1)
                 }
             }
         }
@@ -326,16 +329,30 @@ private fun SmallText(text: String) {
     Text(text, color = PhoneMuted, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
-private fun PhoneUiState.bridgeReady(): Boolean =
-    bridgeServiceActive && authorized && cxrConnected && glassBtConnected
-
 private fun PhoneUiState.bridgeSummary(): String = when {
-    bridgeReady() && taskerReady() -> "HUD connected, ${tasks.size} Tasker tasks available."
-    !requiredRokidAppInstalled -> "Global Hi Rokid is missing on this phone."
-    !authorized -> "Hi Rokid authorization will open automatically."
-    !cxrConnected -> "CXR-L is connecting in the foreground service."
-    !glassBtConnected -> "Waiting for the glasses Bluetooth link."
+    bluetoothConnected && taskerReady() -> "HUD connected over Bluetooth, ${tasks.size} Tasker tasks available."
+    bluetoothServerActive -> "Bluetooth bridge is waiting for the glasses HUD."
+    !bridgeServiceActive -> "Start the background bridge to accept glasses commands."
     else -> lastStatus
+}
+
+private fun PhoneUiState.bluetoothHudLabel(): String = when {
+    bluetoothConnected -> "connected"
+    bluetoothServerActive -> "waiting"
+    else -> "offline"
+}
+
+private fun PhoneUiState.bluetoothPairingLabel(): String = when {
+    bluetoothConnected -> "connected"
+    bluetoothPaired -> "locked"
+    bluetoothPairingMode -> "pairing"
+    else -> "not paired"
+}
+
+private fun PhoneUiState.setupLinkLabel(): String = when {
+    cxrConnected && glassBtConnected -> "connected"
+    cxrConnected || glassBtConnected -> "starting"
+    else -> "idle"
 }
 
 private fun PhoneUiState.taskerStatusLabel(): String = when {
@@ -353,6 +370,10 @@ private fun requiredPermissions(): Array<String> = buildList {
     add(Manifest.permission.ACCESS_COARSE_LOCATION)
     add(Manifest.permission.ACCESS_FINE_LOCATION)
     add(TaskerRepository.PERMISSION_RUN_TASKS)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        add(Manifest.permission.BLUETOOTH_CONNECT)
+        add(Manifest.permission.BLUETOOTH_SCAN)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.NEARBY_WIFI_DEVICES)
         add(Manifest.permission.POST_NOTIFICATIONS)
@@ -361,7 +382,6 @@ private fun requiredPermissions(): Array<String> = buildList {
 
 private val PhoneBg = Color(0xFF101312)
 private val PhonePanel = Color(0xFF171D1A)
-private val PhoneSelected = Color(0xFF1F2A20)
 private val PhoneBorder = Color(0xFF2B3831)
 private val PhoneText = Color(0xFFE7EEE8)
 private val PhoneMuted = Color(0xFF9DAAA0)

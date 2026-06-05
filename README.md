@@ -31,14 +31,18 @@ Tasker Bridge lets you launch your Android Tasker automations from a simple Roki
 
 Get the latest phone APK from [GitHub Releases](https://github.com/Anezium/Tasker-Bridge/releases/latest).
 
-You only need to install the phone APK manually. The phone build embeds the glasses helper APK and can upload/install/open it on the glasses through CXR-L when you tap **Start bridge**.
+You only need to install the phone APK manually. The phone build embeds the glasses helper APK and can upload/install/open it on the glasses through CXR-L from the **Glasses HUD** actions. Runtime task commands use Bluetooth, not CXR-L.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and upgrade details.
 
 ## What It Does
 
 - Lists named Tasker tasks on the Rokid Glasses HUD.
 - Launches the selected Tasker task from the glasses.
 - Keeps Tasker access and execution on the Android phone.
-- Uses Global Hi Rokid CXR-L to install and launch the glasses helper.
+- Uses Global Hi Rokid CXR-L only to install and launch the glasses helper.
+- Uses a lightweight Bluetooth RFCOMM link for HUD task lists and launch commands.
+- Pairs by the Tasker Bridge Bluetooth service endpoint, not by the device name.
 - Runs a lightweight foreground `connectedDevice` bridge on the phone.
 - Refreshes Tasker on HUD open/resume instead of polling forever.
 - Responds cache-first, then refreshes Tasker and only pushes an update if the task list changed.
@@ -59,10 +63,11 @@ Tasker Bridge currently targets Android 31+ on the phone.
 1. Install the phone APK from the latest release.
 2. Open Tasker Bridge on the phone.
 3. Accept the Android permissions.
-4. Authorize the app in Global Hi Rokid when prompted.
-5. Tap **Start bridge**.
-6. The phone checks whether the glasses helper is installed, uploads it if needed, then opens the HUD.
-7. On the glasses, swipe to choose a task and tap to launch it.
+4. Tap **Install HUD** when the helper needs to be installed or updated.
+5. Tap **Launch HUD** to open it on the glasses.
+6. Keep **Start background bridge** running so the phone can accept HUD commands.
+7. On first Bluetooth connection, the phone and HUD remember each other.
+8. On the glasses, swipe to choose a task and tap to launch it.
 
 ## Controls
 
@@ -83,27 +88,32 @@ Phone app
   -> CXR-L CUSTOMAPP session for com.anezium.taskerbridge.glasses
   -> helper APK check/upload/install
   -> helper activity launch
+  -> CXR-L disconnects after setup
 
 Glasses helper
-  -> CXRServiceBridge READY / REQUEST_TASKS
+  -> Bluetooth RFCOMM server while HUD is open
+  -> sends READY / REQUEST_TASKS
   -> receives TASK_LIST
   -> sends LAUNCH_TASK
 
 Phone app
+  -> foreground connectedDevice service connects to the paired HUD over Bluetooth
   -> sends Tasker run broadcast
   -> returns LAUNCH_RESULT
 ```
 
-Tasker Bridge uses small JSON messages over stable CXR channels:
+The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone connects only to the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first phone that connects after install and rejects other Bluetooth clients.
 
-- `anezium_tasker_bridge_control`: phone to glasses
-- `anezium_tasker_bridge_status`: glasses to phone
+Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOMM service UUID:
+
+- phone to glasses: `TASK_LIST`, `LAUNCH_RESULT`, status updates
+- glasses to phone: `READY`, `REQUEST_TASKS`, `LAUNCH_TASK`, selection changes
 
 ## Battery Behavior
 
-The phone bridge is designed to sit idle. It does not hold a wake lock, does not refresh Tasker on a timer, and does not spam CXR messages. The foreground service exists so Android keeps the CXR-L listener alive; Tasker refresh happens when the HUD opens/resumes or when the HUD explicitly asks for the task list.
+The phone bridge is designed to sit idle. It does not hold a wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. The foreground service exists so Android keeps the Bluetooth bridge alive; Tasker refresh happens when the HUD opens/resumes or when the HUD explicitly asks for the task list.
 
-If the phone app is force-stopped from Android settings, the glasses cannot wake it through CXR because the phone-side CXR callback no longer exists. Open the phone app again to restart the bridge.
+If the phone app is force-stopped from Android settings, the glasses cannot wake it through Bluetooth because the phone-side service no longer exists. Open the phone app again to restart the bridge.
 
 ## Build
 
@@ -141,12 +151,12 @@ inside the phone APK assets.
 ## Project Layout
 
 ```text
-phone-app/       Android phone companion, CXR-L bridge, Tasker runtime
-glasses-helper/ Rokid glasses HUD, CXRServiceBridge client
+phone-app/       Android phone companion, Bluetooth bridge, CXR-L setup, Tasker runtime
+glasses-helper/ Rokid glasses HUD, Bluetooth RFCOMM server
 shared/         JSON protocol and shared task models
 assets/         README screenshots and project media
 ```
 
 ## Notes
 
-Tasker Bridge is experimental Rokid tooling. It depends on Global Hi Rokid CXR-L behavior and Tasker's public external-access/run-task integration, so firmware, Hi Rokid, and Tasker updates can affect the bridge.
+Tasker Bridge is experimental Rokid tooling. It depends on Android Bluetooth behavior, Global Hi Rokid CXR-L setup behavior, and Tasker's public external-access/run-task integration, so firmware, Hi Rokid, and Tasker updates can affect the bridge.

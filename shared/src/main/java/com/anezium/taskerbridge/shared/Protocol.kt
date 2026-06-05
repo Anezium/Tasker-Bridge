@@ -4,11 +4,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object Protocol {
+    const val PROTOCOL_VERSION = 2
     const val CONTROL_CHANNEL = "anezium_tasker_bridge_control"
     const val STATUS_CHANNEL = "anezium_tasker_bridge_status"
     const val HELPER_PACKAGE = "com.anezium.taskerbridge.glasses"
     const val HELPER_MAIN_ACTIVITY = "com.anezium.taskerbridge.glasses.MainActivity"
-    const val MAX_TASKS_ON_HUD = 7
+    const val PHONE_ROLE = "phone"
+    const val HELPER_ROLE = "helper"
+    const val BLUETOOTH_SERVICE_NAME = "Tasker Bridge"
+    const val BLUETOOTH_SERVICE_UUID = "3d31b090-bb2f-4876-b55f-0f88a6c42c2e"
+    const val MAX_WIRE_MESSAGE_CHARS = 64_000
+    const val MAX_TASKS_ON_HUD = 6
 }
 
 data class TaskerTask(
@@ -22,21 +28,28 @@ enum class ControlType {
     LAUNCH_RESULT,
     SET_STATUS,
     PING,
+    UNKNOWN,
 }
 
 enum class StatusType {
+    HELLO,
     READY,
     REQUEST_TASKS,
     LAUNCH_TASK,
     SELECTION_CHANGED,
     ERROR,
     PONG,
+    UNKNOWN,
 }
 
 sealed interface ControlMessage {
     val type: ControlType
 
-    data class Hello(val appVersion: String = "0.1.0") : ControlMessage {
+    data class Hello(
+        val protocolVersion: Int = Protocol.PROTOCOL_VERSION,
+        val appVersion: String = "unknown",
+        val peerRole: String = Protocol.PHONE_ROLE,
+    ) : ControlMessage {
         override val type = ControlType.HELLO
     }
 
@@ -72,6 +85,13 @@ sealed interface ControlMessage {
     data class Ping(val nonce: String) : ControlMessage {
         override val type = ControlType.PING
     }
+
+    data class Unknown(
+        val rawType: String,
+        val rawPayload: String,
+    ) : ControlMessage {
+        override val type = ControlType.UNKNOWN
+    }
 }
 
 data class StatusMessage(
@@ -79,6 +99,8 @@ data class StatusMessage(
     val message: String = "",
     val taskName: String = "",
     val selectedIndex: Int = -1,
+    val protocolVersion: Int = Protocol.PROTOCOL_VERSION,
+    val peerRole: String = Protocol.HELPER_ROLE,
     val timestampMs: Long = System.currentTimeMillis(),
 )
 
@@ -87,7 +109,10 @@ object JsonProtocol {
         val json = JSONObject()
             .put("type", message.type.name)
         when (message) {
-            is ControlMessage.Hello -> json.put("appVersion", message.appVersion)
+            is ControlMessage.Hello -> json
+                .put("protocolVersion", message.protocolVersion)
+                .put("appVersion", message.appVersion)
+                .put("peerRole", message.peerRole)
             is ControlMessage.TaskList -> json
                 .put("tasks", JSONArray().apply {
                     message.tasks.forEach { task ->
@@ -114,14 +139,22 @@ object JsonProtocol {
                 .put("urgent", message.urgent)
                 .put("timestampMs", message.timestampMs)
             is ControlMessage.Ping -> json.put("nonce", message.nonce)
+            is ControlMessage.Unknown -> json
+                .put("rawType", message.rawType)
+                .put("rawPayload", message.rawPayload)
         }
         return json.toString()
     }
 
     fun decodeControl(raw: String): ControlMessage {
         val json = JSONObject(raw)
-        return when (ControlType.valueOf(json.getString("type"))) {
-            ControlType.HELLO -> ControlMessage.Hello(json.optString("appVersion", "unknown"))
+        val rawType = json.optString("type")
+        return when (controlTypeOrUnknown(rawType)) {
+            ControlType.HELLO -> ControlMessage.Hello(
+                protocolVersion = json.optInt("protocolVersion", 1),
+                appVersion = json.optString("appVersion", "unknown"),
+                peerRole = json.optString("peerRole", Protocol.PHONE_ROLE),
+            )
             ControlType.TASK_LIST -> ControlMessage.TaskList(
                 tasks = buildList {
                     val tasks = json.optJSONArray("tasks") ?: JSONArray()
@@ -152,6 +185,7 @@ object JsonProtocol {
                 timestampMs = json.optLong("timestampMs", System.currentTimeMillis()),
             )
             ControlType.PING -> ControlMessage.Ping(json.optString("nonce"))
+            ControlType.UNKNOWN -> ControlMessage.Unknown(rawType = rawType, rawPayload = raw)
         }
     }
 
@@ -160,17 +194,27 @@ object JsonProtocol {
         .put("message", message.message)
         .put("taskName", message.taskName)
         .put("selectedIndex", message.selectedIndex)
+        .put("protocolVersion", message.protocolVersion)
+        .put("peerRole", message.peerRole)
         .put("timestampMs", message.timestampMs)
         .toString()
 
     fun decodeStatus(raw: String): StatusMessage {
         val json = JSONObject(raw)
         return StatusMessage(
-            type = StatusType.valueOf(json.getString("type")),
+            type = statusTypeOrUnknown(json.optString("type")),
             message = json.optString("message"),
             taskName = json.optString("taskName"),
             selectedIndex = json.optInt("selectedIndex", -1),
+            protocolVersion = json.optInt("protocolVersion", 1),
+            peerRole = json.optString("peerRole", Protocol.HELPER_ROLE),
             timestampMs = json.optLong("timestampMs", System.currentTimeMillis()),
         )
     }
+
+    private fun controlTypeOrUnknown(value: String): ControlType =
+        ControlType.values().firstOrNull { it.name == value } ?: ControlType.UNKNOWN
+
+    private fun statusTypeOrUnknown(value: String): StatusType =
+        StatusType.values().firstOrNull { it.name == value } ?: StatusType.UNKNOWN
 }

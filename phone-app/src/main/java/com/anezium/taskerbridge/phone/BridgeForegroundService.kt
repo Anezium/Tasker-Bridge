@@ -34,6 +34,7 @@ class BridgeForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            runtime.stopBackground()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -52,6 +53,7 @@ class BridgeForegroundService : Service() {
 
     override fun onDestroy() {
         notificationJob?.cancel()
+        runtime.stopBackground()
         runtime.markServiceActive(false)
         serviceScope.cancel()
         super.onDestroy()
@@ -144,8 +146,7 @@ class BridgeForegroundService : Service() {
 }
 
 private fun PhoneUiState.notificationText(): String = when {
-    !authorized -> "Waiting for Hi Rokid authorization"
-    cxrConnected && glassBtConnected -> "CXR-L connected, ${tasks.size} tasks ready"
-    cxrConnected -> "CXR-L connected, waiting for glasses"
-    else -> "Connecting CXR-L"
+    bluetoothConnected -> "HUD connected, ${tasks.size} tasks ready"
+    bluetoothServerActive -> "Waiting for Tasker Bridge HUD"
+    else -> "Starting Bluetooth bridge"
 }

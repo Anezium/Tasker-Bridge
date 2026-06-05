@@ -5,31 +5,49 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.anezium.taskerbridge.shared.Protocol
@@ -42,11 +60,36 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        runtime = HelperRuntime.get()
+        runtime = HelperRuntime.get(applicationContext)
         runtime.start()
         setContent {
             val state by runtime.state.collectAsState()
-            HelperScreen(state)
+            BackHandler {
+                hideHudOrNavigateBack()
+            }
+            HelperScreen(
+                state = state,
+                onProjectFocus = runtime::selectProjectAt,
+                onPrevious = {
+                    if (acceptInput()) {
+                        Log.d(TAG, "accessibility previous")
+                        runtime.previousTask()
+                    }
+                },
+                onNext = {
+                    if (acceptInput()) {
+                        Log.d(TAG, "accessibility next")
+                        runtime.nextTask()
+                    }
+                },
+                onActivateSelected = {
+                    if (acceptInput()) {
+                        Log.d(TAG, "accessibility activate selected")
+                        runtime.launchSelectedTask()
+                    }
+                },
+                onTaskFocus = runtime::selectTaskAt,
+            )
         }
     }
 
@@ -92,11 +135,18 @@ class MainActivity : ComponentActivity() {
             }
             KeyEvent.KEYCODE_BACK -> {
                 Log.d(TAG, "input back")
-                moveTaskToBack(true)
+                hideHudOrNavigateBack()
                 true
             }
             else -> super.dispatchKeyEvent(event)
         }
+    }
+
+    override fun onDestroy() {
+        if (isFinishing && ::runtime.isInitialized) {
+            runtime.close()
+        }
+        super.onDestroy()
     }
 
     private fun acceptInput(): Boolean {
@@ -104,6 +154,12 @@ class MainActivity : ComponentActivity() {
         if (now - lastInputAtMs < INPUT_DEBOUNCE_MS) return false
         lastInputAtMs = now
         return true
+    }
+
+    private fun hideHudOrNavigateBack() {
+        if (runtime.navigateBack()) return
+        runtime.close()
+        finish()
     }
 
     companion object {
@@ -116,7 +172,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun HelperScreen(state: HelperUiState) {
+private fun HelperScreen(
+    state: HelperUiState,
+    onProjectFocus: (Int) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onActivateSelected: () -> Unit,
+    onTaskFocus: (Int) -> Unit,
+) {
     MaterialTheme {
         Surface(
             modifier = Modifier
@@ -131,8 +194,15 @@ private fun HelperScreen(state: HelperUiState) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Header(state)
-                TaskRows(state)
-                Spacer(modifier = Modifier.weight(1f))
+                TaskRows(
+                    state = state,
+                    onProjectFocus = onProjectFocus,
+                    onPrevious = onPrevious,
+                    onNext = onNext,
+                    onActivateSelected = onActivateSelected,
+                    onTaskFocus = onTaskFocus,
+                    modifier = Modifier.weight(1f),
+                )
                 StatusLine(state)
             }
         }
@@ -162,57 +232,79 @@ private fun Header(state: HelperUiState) {
 }
 
 @Composable
-private fun TaskRows(state: HelperUiState) {
-    val maxRows = Protocol.MAX_TASKS_ON_HUD
-    val windowStart = when {
-        state.tasks.size <= maxRows -> 0
-        state.selectedIndex < maxRows -> 0
-        else -> (state.selectedIndex - maxRows + 1).coerceAtMost(state.tasks.size - maxRows)
-    }
-    val visible = state.tasks.drop(windowStart).take(maxRows)
-    if (visible.isEmpty()) {
-        EmptyState(state)
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        visible.forEachIndexed { localIndex, task ->
-            val index = windowStart + localIndex
-            val selected = index == state.selectedIndex
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .border(
-                        width = if (selected) 2.dp else 1.dp,
-                        color = if (selected) HudFocus else HudBorder,
-                        shape = RowShape,
-                    )
-                    .padding(horizontal = 13.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    "%02d".format(index + 1),
-                    color = if (selected) HudFocus else HudMuted,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        task.name,
-                        color = if (selected) HudText else HudText.copy(alpha = 0.82f),
-                        fontSize = 18.sp,
-                        fontWeight = if (selected) FontWeight.Black else FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (task.projectName.isNotBlank()) {
-                        Text(
-                            task.projectName,
-                            color = HudMuted,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+private fun TaskRows(
+    state: HelperUiState,
+    onProjectFocus: (Int) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onActivateSelected: () -> Unit,
+    onTaskFocus: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val model = state.menuModel()
+    val projects = model.projects
+    val project = model.selectedProject
+    val rowCount = model.rowCount
+    val selectedRowIndex = model.selectedRowIndex
+    val listState = rememberLazyListState()
+
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        if (state.tasks.isEmpty() || rowCount == 0) {
+            EmptyState(
+                state = state,
+                modifier = Modifier.fillMaxSize(),
+            )
+            return@BoxWithConstraints
+        }
+
+        val visibleRows = visibleTaskRows(
+            viewportHeight = maxHeight,
+            taskCount = rowCount,
+        )
+        val targetFirstVisible = taskWindowStart(
+            taskCount = rowCount,
+            selectedIndex = selectedRowIndex,
+            visibleRows = visibleRows,
+        )
+
+        LaunchedEffect(selectedRowIndex, rowCount, visibleRows, state.viewMode, state.selectedProjectName) {
+            listState.animateScrollToItem(targetFirstVisible)
+        }
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(TASK_ROW_SPACING_DP.dp),
+            userScrollEnabled = false,
+        ) {
+            when (state.viewMode) {
+                HelperViewMode.PROJECTS -> {
+                    itemsIndexed(projects) { index, item ->
+                        MenuRow(
+                            title = item.displayName,
+                            subtitle = taskCountLabel(item.taskIndices.size),
+                            isSelected = index == selectedRowIndex,
+                            actionLabel = "Open project",
+                            onFocus = { onProjectFocus(index) },
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                            onActivate = onActivateSelected,
+                        )
+                    }
+                }
+                HelperViewMode.TASKS -> {
+                    val taskIndices = project?.taskIndices.orEmpty()
+                    itemsIndexed(taskIndices) { index, taskIndex ->
+                        val task = state.tasks[taskIndex]
+                        MenuRow(
+                            title = task.name,
+                            subtitle = "",
+                            isSelected = index == selectedRowIndex,
+                            actionLabel = "Run task",
+                            onFocus = { onTaskFocus(taskIndex) },
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                            onActivate = onActivateSelected,
                         )
                     }
                 }
@@ -222,11 +314,115 @@ private fun TaskRows(state: HelperUiState) {
 }
 
 @Composable
-private fun EmptyState(state: HelperUiState) {
-    Box(
+private fun MenuRow(
+    title: String,
+    subtitle: String,
+    isSelected: Boolean,
+    actionLabel: String,
+    onFocus: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onActivate: () -> Unit,
+) {
+    val accessibilityLabel = if (subtitle.isBlank()) title else "$title, $subtitle"
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(190.dp)
+            .height(TASK_ROW_HEIGHT_DP.dp)
+            .clickable(
+                onClickLabel = actionLabel,
+                role = Role.Button,
+                onClick = onActivate,
+            )
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) onFocus()
+            }
+            .focusable()
+            .clearAndSetSemantics {
+                role = Role.Button
+                selected = isSelected
+                stateDescription = if (isSelected) "Selected" else "Not selected"
+                contentDescription = accessibilityLabel
+                customActions = listOf(
+                    CustomAccessibilityAction(label = ACCESSIBILITY_SELECT_ACTION_LABEL) {
+                        onFocus()
+                        true
+                    },
+                    CustomAccessibilityAction(label = ACCESSIBILITY_PREVIOUS_ACTION_LABEL) {
+                        onPrevious()
+                        true
+                    },
+                    CustomAccessibilityAction(label = ACCESSIBILITY_NEXT_ACTION_LABEL) {
+                        onNext()
+                        true
+                    },
+                )
+                onClick(label = actionLabel) {
+                    onActivate()
+                    true
+                }
+            }
+            .border(
+                width = if (isSelected) 3.dp else 1.dp,
+                color = if (isSelected) HudFocus else HudBorder,
+                shape = RowShape,
+            )
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                color = if (isSelected) HudText else HudText.copy(alpha = 0.82f),
+                fontSize = 18.sp,
+                fontWeight = if (isSelected) FontWeight.Black else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    color = HudMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private fun visibleTaskRows(
+    viewportHeight: Dp,
+    taskCount: Int,
+): Int {
+    val rows = ((viewportHeight.value + TASK_ROW_SPACING_DP) / TASK_ROW_STRIDE_DP).toInt()
+    return rows
+        .coerceAtLeast(1)
+        .coerceAtMost(Protocol.MAX_TASKS_ON_HUD)
+        .coerceAtMost(taskCount)
+}
+
+private fun taskWindowStart(
+    taskCount: Int,
+    selectedIndex: Int,
+    visibleRows: Int,
+): Int {
+    if (taskCount <= visibleRows) return 0
+    val safeSelectedIndex = selectedIndex.coerceIn(0, taskCount - 1)
+    val maxStart = taskCount - visibleRows
+    return (safeSelectedIndex - visibleRows + 1).coerceIn(0, maxStart)
+}
+
+@Composable
+private fun EmptyState(
+    state: HelperUiState,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
             .border(1.dp, HudBorder, RowShape)
             .padding(16.dp),
         contentAlignment = Alignment.Center,
@@ -268,17 +464,41 @@ private fun StatusLine(state: HelperUiState) {
 }
 
 private fun HelperUiState.headerSubtitle(): String = when {
+    !phoneConnected -> "Waiting for phone Bluetooth"
     !taskerInstalled -> "Tasker not detected on phone"
     !taskerEnabled -> "Tasker disabled"
     !externalAccess -> "External access off"
     tasks.isEmpty() -> "No named tasks"
-    else -> "${tasks.size} tasks"
+    else -> menuSubtitle()
 }
 
+private fun HelperUiState.menuSubtitle(): String {
+    val model = menuModel()
+    val projects = model.projects
+    if (projects.isEmpty()) return "No named tasks"
+    return when (viewMode) {
+        HelperViewMode.PROJECTS -> "Project ${model.safeProjectIndex + 1}/${projects.size}"
+        HelperViewMode.TASKS -> {
+            val project = model.selectedProject ?: return "Project ${model.safeProjectIndex + 1}/${projects.size}"
+            "${project.displayName} ${model.selectedRowIndex + 1}/${project.taskIndices.size}"
+        }
+    }
+}
+
+private fun taskCountLabel(count: Int): String =
+    if (count == 1) "1 task" else "$count tasks"
+
 private fun HelperUiState.headerColor(): Color = when {
-    taskerInstalled && taskerEnabled && externalAccess && tasks.isNotEmpty() -> HudFocus
+    phoneConnected && taskerInstalled && taskerEnabled && externalAccess && tasks.isNotEmpty() -> HudFocus
     else -> HudWarn
 }
+
+private const val TASK_ROW_HEIGHT_DP = 52f
+private const val TASK_ROW_SPACING_DP = 7f
+private const val TASK_ROW_STRIDE_DP = TASK_ROW_HEIGHT_DP + TASK_ROW_SPACING_DP
+private const val ACCESSIBILITY_SELECT_ACTION_LABEL = "Select"
+private const val ACCESSIBILITY_PREVIOUS_ACTION_LABEL = "Previous"
+private const val ACCESSIBILITY_NEXT_ACTION_LABEL = "Next"
 
 private val HudText = Color(0xFFEAF3EB)
 private val HudMuted = Color(0xFF9AA79E)

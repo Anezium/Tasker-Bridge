@@ -26,15 +26,20 @@ class BridgeRuntime private constructor(context: Context) {
     val state: StateFlow<PhoneUiState> = _state.asStateFlow()
 
     private var started = false
-    private var autoLaunchEnabled = false
-    private var autoInstallAttempted = false
-    private var connectAfterAuthorization = false
     private var authorizationRequestInFlight = false
     private var lastAuthorizationRequestAtMs = 0L
-    private var lastConnectAttemptAtMs = 0L
     private var lastHudTaskRequestAtMs = 0L
     private var lastTaskListSentAtMs = 0L
     private var lastTaskerSnapshot: TaskerSnapshot? = null
+    private val cxrSetup = CxrSetupCoordinator(CONNECT_COOLDOWN_MS)
+
+    private val bluetooth = BluetoothBridgeServer(
+        context = appContext,
+        onState = { state -> onMain { handleBluetoothState(state) } },
+        onMessage = { message -> onMain { handleHelperMessage(message) } },
+        onLog = { message -> onMain { _state.value = _state.value.copy(lastStatus = message) } },
+        onError = { message, _ -> onMain { setError(message) } },
+    )
 
     private val cxr = CxrPhoneController(
         context = appContext,
@@ -46,26 +51,23 @@ class BridgeRuntime private constructor(context: Context) {
                     error = if (authorized) "" else "Hi Rokid authorization failed.",
                     lastStatus = if (authorized) "Hi Rokid authorized." else "Hi Rokid authorization failed.",
                 )
-                if (authorized && connectAfterAuthorization) {
-                    connectAfterAuthorization = false
-                    connectRokid(force = true)
+                if (authorized) {
+                    continuePendingCxrSetup(forceConnect = true)
+                } else {
+                    cxrSetup.cancel()
                 }
             }
         },
         onConnectionChanged = { cxrConnected, btConnected ->
             onMain {
                 _state.value = _state.value.copy(
-                    authorized = true,
+                    authorized = _state.value.authorized || cxrConnected || btConnected,
                     cxrConnected = cxrConnected,
                     glassBtConnected = btConnected,
                 )
-                if (cxrConnected && btConnected) {
-                    ensureHelperForAutoStart()
-                    refreshTasker(sendToGlasses = false)
-                }
+                continuePendingCxrSetup()
             }
         },
-        onHelperMessage = { message -> onMain { handleHelperMessage(message) } },
         onInstallStatus = { message, busy ->
             onMain {
                 _state.value = _state.value.copy(
@@ -75,27 +77,31 @@ class BridgeRuntime private constructor(context: Context) {
                 )
             }
         },
-        onHelperInstalled = {
+        onHelperInstalled = { success ->
             onMain {
-                if (autoLaunchEnabled) {
-                    launchHelper()
+                updateHelperVersionState()
+                cxrSetup.finishOperation()
+                if (success) {
+                    _state.value = _state.value.copy(
+                        lastStatus = "HUD installed. Launch it when you are ready.",
+                    )
                 }
+                releaseCxrSoon()
             }
         },
         onHelperOpened = { opened ->
             onMain {
+                cxrSetup.finishOperation()
                 if (opened) {
-                    _state.value = _state.value.copy(lastStatus = "HUD opened. Waiting for task request.")
-                    sendTaskListAfterHelperOpen()
+                    _state.value = _state.value.copy(
+                        lastStatus = "HUD opened. Bluetooth will handle Tasker commands.",
+                    )
                 }
+                releaseCxrSoon()
             }
         },
         onLog = { message -> onMain { _state.value = _state.value.copy(lastStatus = message) } },
-        onError = { message, _ ->
-            onMain {
-                _state.value = _state.value.copy(error = message, lastStatus = message)
-            }
-        },
+        onError = { message, _ -> onMain { setError(message) } },
     )
 
     fun start() {
@@ -104,6 +110,8 @@ class BridgeRuntime private constructor(context: Context) {
         _state.value = _state.value.copy(
             requiredRokidAppInstalled = cxr.isRequiredRokidAppInstalled(appContext),
             authorized = cxr.isAuthorized(),
+            helperBundledVersion = cxr.bundledHelperVersionLabel(),
+            helperLastInstalledVersion = cxr.lastInstalledHelperVersionLabel(),
             lastStatus = "Bridge runtime started.",
         )
         refreshTasker(sendToGlasses = false)
@@ -111,44 +119,48 @@ class BridgeRuntime private constructor(context: Context) {
 
     fun startBackground() {
         start()
-        autoLaunchEnabled = true
+        bluetooth.start()
         refreshTasker(sendToGlasses = false)
-        if (cxr.isAuthorized()) {
-            connectRokid()
-        } else {
-            _state.value = _state.value.copy(
-                authorized = false,
-                lastStatus = "Waiting for Hi Rokid authorization.",
-            )
-        }
     }
 
-    fun autoStartFromActivity(activity: Activity) {
-        start()
-        autoLaunchEnabled = true
-        refreshTasker(sendToGlasses = false)
-        if (cxr.isAuthorized()) {
-            connectRokid()
-        } else {
-            requestAuthorization(activity)
-        }
+    fun stopBackground() {
+        bluetooth.stop()
+        _state.value = _state.value.copy(
+            bluetoothServerActive = false,
+            bluetoothConnected = false,
+            bluetoothPairingMode = false,
+            bluetoothStatus = "Bluetooth stopped.",
+        )
     }
 
-    fun startBridgeFromUi(activity: Activity) {
-        start()
-        autoLaunchEnabled = true
-        autoInstallAttempted = false
-        refreshTasker(sendToGlasses = false)
-        if (cxr.isAuthorized()) {
-            connectRokid(force = true)
-            ensureHelperForAutoStart(force = true)
-        } else {
-            requestAuthorization(activity)
-        }
+    fun forgetBluetoothPairing() {
+        bluetooth.forgetPairing()
+        _state.value = _state.value.copy(
+            bluetoothConnected = false,
+            bluetoothPaired = false,
+            bluetoothPairingMode = _state.value.bluetoothServerActive,
+            bluetoothPeerName = "",
+            bluetoothPeerAddress = "",
+            bluetoothStatus = "Bluetooth pairing cleared.",
+            lastStatus = "Bluetooth pairing cleared.",
+        )
     }
 
     fun markServiceActive(active: Boolean) {
         _state.value = _state.value.copy(bridgeServiceActive = active)
+    }
+
+    fun installHudFromUi(activity: Activity) {
+        start()
+        cxrSetup.begin(CxrSetupAction.INSTALL)
+        updateHelperVersionState()
+        beginCxrSetup(activity)
+    }
+
+    fun launchHudFromUi(activity: Activity) {
+        start()
+        cxrSetup.begin(CxrSetupAction.LAUNCH)
+        beginCxrSetup(activity)
     }
 
     fun requestAuthorization(activity: Activity) {
@@ -157,7 +169,6 @@ class BridgeRuntime private constructor(context: Context) {
         if (now - lastAuthorizationRequestAtMs < AUTH_REQUEST_COOLDOWN_MS) return
         lastAuthorizationRequestAtMs = now
         authorizationRequestInFlight = true
-        connectAfterAuthorization = true
         _state.value = _state.value.copy(lastStatus = "Opening Hi Rokid authorization...")
         cxr.requestAuthorization(activity, CxrPhoneController.AUTH_REQUEST_CODE)
     }
@@ -196,39 +207,6 @@ class BridgeRuntime private constructor(context: Context) {
         }
     }
 
-    fun selectTask(index: Int) {
-        val safeIndex = index.coerceInTaskBounds(_state.value.tasks)
-        _state.value = _state.value.copy(selectedIndex = safeIndex, helperSelectedIndex = safeIndex)
-        sendCurrentTasksToGlasses()
-    }
-
-    fun launchHelper() {
-        autoLaunchEnabled = true
-        cxr.launchHelper()
-    }
-
-    fun stopHelper() {
-        cxr.stopHelper()
-    }
-
-    fun runTaskFromPhone(taskName: String) {
-        scope.launch {
-            val result = tasker.runTask(taskName)
-            _state.value = _state.value.copy(
-                lastStatus = result.message,
-                error = if (result.success) "" else result.message,
-            )
-            cxr.sendLaunchResult(
-                ControlMessage.LaunchResult(
-                    taskName = result.taskName,
-                    success = result.success,
-                    message = result.message,
-                ),
-            )
-            refreshTasker(sendToGlasses = false)
-        }
-    }
-
     fun sendCurrentTasksToGlasses() {
         val current = _state.value
         val snapshot = TaskerSnapshot(
@@ -239,37 +217,94 @@ class BridgeRuntime private constructor(context: Context) {
             tasks = current.tasks,
             message = current.lastStatus,
         )
-        sendSnapshotToGlasses(snapshot)
+        scope.launch {
+            sendSnapshotToGlasses(snapshot)
+        }
     }
 
-    private fun connectRokid(force: Boolean = false) {
+    fun runTaskFromPhone(taskName: String) {
+        scope.launch {
+            val result = tasker.runTask(taskName)
+            _state.value = _state.value.copy(
+                lastStatus = result.message,
+                error = if (result.success) "" else result.message,
+            )
+            val delivered = bluetooth.send(
+                ControlMessage.LaunchResult(
+                    taskName = result.taskName,
+                    success = result.success,
+                    message = result.message,
+                ),
+            )
+            if (!delivered) {
+                _state.value = _state.value.copy(lastStatus = "Waiting for HUD Bluetooth connection.")
+            }
+            refreshTasker(sendToGlasses = false)
+        }
+    }
+
+    private fun beginCxrSetup(activity: Activity) {
         if (!cxr.isAuthorized()) {
             _state.value = _state.value.copy(
                 authorized = false,
-                error = "Hi Rokid authorization is required.",
-                lastStatus = "Hi Rokid authorization is required.",
+                lastStatus = "Hi Rokid authorization is needed for HUD install/launch.",
+            )
+            requestAuthorization(activity)
+            return
+        }
+        continuePendingCxrSetup(forceConnect = true)
+    }
+
+    private fun continuePendingCxrSetup(forceConnect: Boolean = false) {
+        if (!cxr.isAuthorized()) {
+            _state.value = _state.value.copy(
+                authorized = false,
+                lastStatus = "Hi Rokid authorization is required for setup.",
             )
             return
         }
-        val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastConnectAttemptAtMs < CONNECT_COOLDOWN_MS) return
-        lastConnectAttemptAtMs = now
-        _state.value = _state.value.copy(authorized = true, lastStatus = "Connecting CXR-L...")
-        cxr.connect()
+        val setupConnected = _state.value.cxrConnected && _state.value.glassBtConnected
+        when (val step = cxrSetup.nextStep(
+            authorized = true,
+            setupConnected = setupConnected,
+            forceConnect = forceConnect,
+        )) {
+            CxrSetupStep.None -> Unit
+            CxrSetupStep.Connect -> {
+                _state.value = _state.value.copy(
+                    authorized = true,
+                    helperInstallStatus = "Connecting CXR-L for setup...",
+                    lastStatus = "Connecting CXR-L for setup...",
+                )
+                cxr.connect()
+            }
+            is CxrSetupStep.Run -> when (step.action) {
+                CxrSetupAction.INSTALL -> {
+                    Log.i(TAG, "Installing helper through one-shot CXR-L")
+                    cxr.installHelper(forceReinstall = true)
+                }
+                CxrSetupAction.LAUNCH -> {
+                    Log.i(TAG, "Launching helper through one-shot CXR-L")
+                    cxr.ensureHelperRunning()
+                }
+            }
+        }
     }
 
-    private fun ensureHelperForAutoStart(force: Boolean = false) {
-        if (!autoLaunchEnabled && !force) return
-        if (autoInstallAttempted && !force) return
-        val current = _state.value
-        if (!current.cxrConnected || !current.glassBtConnected) return
-        autoInstallAttempted = true
-        if (force) {
-            Log.i(TAG, "Force installing helper through CXR-L")
-            cxr.installHelper()
-        } else {
-            Log.i(TAG, "Ensuring helper is running through CXR-L")
-            cxr.ensureHelperRunning()
+    private fun handleBluetoothState(state: BluetoothServerState) {
+        val wasConnected = _state.value.bluetoothConnected
+        _state.value = _state.value.copy(
+            bluetoothServerActive = state.active,
+            bluetoothConnected = state.connected,
+            bluetoothPaired = state.paired,
+            bluetoothPairingMode = state.pairingMode,
+            bluetoothPeerName = state.peerName,
+            bluetoothPeerAddress = state.peerAddress,
+            bluetoothStatus = state.status,
+            lastStatus = state.status.ifBlank { _state.value.lastStatus },
+        )
+        if (state.connected && !wasConnected) {
+            sendCachedTasksThenRefresh()
         }
     }
 
@@ -277,23 +312,24 @@ class BridgeRuntime private constructor(context: Context) {
         when (message.type) {
             StatusType.READY -> {
                 _state.value = _state.value.copy(
-                    lastStatus = "Glasses helper: ${message.message.ifBlank { message.type.name }}",
+                    lastStatus = "HUD: ${message.message.ifBlank { message.type.name }}",
                 )
+                sendCachedTasksThenRefresh()
             }
             StatusType.REQUEST_TASKS -> {
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastHudTaskRequestAtMs < TASK_REQUEST_DEBOUNCE_MS) {
-                    _state.value = _state.value.copy(lastStatus = "Glasses helper: task request already handled.")
+                    _state.value = _state.value.copy(lastStatus = "HUD task request already handled.")
                     return
                 }
                 lastHudTaskRequestAtMs = now
                 _state.value = _state.value.copy(
-                    lastStatus = "Glasses helper: ${message.message.ifBlank { message.type.name }}",
+                    lastStatus = "HUD: ${message.message.ifBlank { message.type.name }}",
                 )
                 sendCachedTasksThenRefresh()
             }
             StatusType.LAUNCH_TASK -> {
-                _state.value = _state.value.copy(lastStatus = "Glasses requested: ${message.taskName}")
+                _state.value = _state.value.copy(lastStatus = "HUD requested: ${message.taskName}")
                 runTaskFromPhone(message.taskName)
             }
             StatusType.SELECTION_CHANGED -> {
@@ -304,8 +340,12 @@ class BridgeRuntime private constructor(context: Context) {
                     lastStatus = "HUD selected ${message.taskName}",
                 )
             }
-            StatusType.ERROR -> {
-                _state.value = _state.value.copy(error = message.message, lastStatus = message.message)
+            StatusType.ERROR -> setError(message.message)
+            StatusType.HELLO -> {
+                _state.value = _state.value.copy(lastStatus = "HUD Bluetooth handshake complete.")
+            }
+            StatusType.UNKNOWN -> {
+                _state.value = _state.value.copy(lastStatus = "Ignored unknown HUD message.")
             }
             StatusType.PONG -> {
                 _state.value = _state.value.copy(lastStatus = "HUD pong: ${message.message}")
@@ -313,9 +353,9 @@ class BridgeRuntime private constructor(context: Context) {
         }
     }
 
-    private fun sendSnapshotToGlasses(snapshot: TaskerSnapshot) {
+    private suspend fun sendSnapshotToGlasses(snapshot: TaskerSnapshot) {
         lastTaskListSentAtMs = SystemClock.elapsedRealtime()
-        cxr.sendTaskList(
+        val sent = bluetooth.send(
             ControlMessage.TaskList(
                 tasks = snapshot.tasks,
                 selectedIndex = _state.value.selectedIndex.coerceInTaskBounds(snapshot.tasks),
@@ -325,35 +365,54 @@ class BridgeRuntime private constructor(context: Context) {
                 message = snapshot.message,
             ),
         )
+        if (!sent) {
+            _state.value = _state.value.copy(lastStatus = "Waiting for HUD Bluetooth connection.")
+        }
     }
 
     private fun sendCachedTasksThenRefresh() {
-        val cached = lastTaskerSnapshot
-        if (cached == null) {
-            refreshTasker(sendToGlasses = true)
-            return
+        scope.launch {
+            val cached = lastTaskerSnapshot
+            if (cached == null) {
+                refreshTasker(sendToGlasses = true)
+                return@launch
+            }
+            val selected = _state.value.selectedIndex.coerceInTaskBounds(cached.tasks)
+            sendSnapshotToGlasses(cached)
+            refreshTasker(
+                sendToGlasses = true,
+                skipSendIfFingerprint = cached.fingerprint(selected),
+            )
         }
-        val selected = _state.value.selectedIndex.coerceInTaskBounds(cached.tasks)
-        sendSnapshotToGlasses(cached)
-        refreshTasker(
-            sendToGlasses = true,
-            skipSendIfFingerprint = cached.fingerprint(selected),
-        )
     }
 
-    private fun sendTaskListAfterHelperOpen() {
+    private fun releaseCxrSoon() {
         scope.launch {
-            val openedAtMs = SystemClock.elapsedRealtime()
-            delay(HELPER_OPEN_TASK_LIST_DELAY_MS)
-            val sentAfterOpen = lastTaskListSentAtMs >= openedAtMs
-            val sentRecently = SystemClock.elapsedRealtime() - lastTaskListSentAtMs < RECENT_TASK_LIST_WINDOW_MS
-            if (sentAfterOpen || sentRecently) return@launch
-            sendCachedTasksThenRefresh()
+            delay(CXR_RELEASE_DELAY_MS)
+            if (!cxrSetup.isIdle()) return@launch
+            cxr.disconnect()
+            _state.value = _state.value.copy(
+                cxrConnected = false,
+                glassBtConnected = false,
+                helperInstallBusy = false,
+                lastStatus = "CXR-L released; Bluetooth runtime remains active.",
+            )
         }
+    }
+
+    private fun setError(message: String) {
+        _state.value = _state.value.copy(error = message, lastStatus = message)
     }
 
     private fun onMain(block: () -> Unit) {
         scope.launch(Dispatchers.Main.immediate) { block() }
+    }
+
+    private fun updateHelperVersionState() {
+        _state.value = _state.value.copy(
+            helperBundledVersion = cxr.bundledHelperVersionLabel(),
+            helperLastInstalledVersion = cxr.lastInstalledHelperVersionLabel(),
+        )
     }
 
     companion object {
@@ -361,8 +420,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val AUTH_REQUEST_COOLDOWN_MS = 2_500L
         private const val CONNECT_COOLDOWN_MS = 5_000L
         private const val TASK_REQUEST_DEBOUNCE_MS = 800L
-        private const val HELPER_OPEN_TASK_LIST_DELAY_MS = 1_200L
-        private const val RECENT_TASK_LIST_WINDOW_MS = 2_500L
+        private const val CXR_RELEASE_DELAY_MS = 1_500L
 
         @Volatile
         private var instance: BridgeRuntime? = null
