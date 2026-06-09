@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
                 onActivateSelected = {
                     if (acceptInput()) {
                         Log.d(TAG, "accessibility activate selected")
-                        runtime.launchSelectedTask()
+                        launchSelectedTaskAndHideHud()
                     }
                 },
                 onTaskFocus = runtime::selectTaskAt,
@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity() {
             KEYCODE_ROKID_CLICK -> {
                 if (!acceptInput()) return true
                 Log.d(TAG, "input launch key=${event.keyCode}")
-                runtime.launchSelectedTask()
+                launchSelectedTaskAndHideHud()
                 true
             }
             KeyEvent.KEYCODE_BACK -> {
@@ -160,6 +160,15 @@ class MainActivity : ComponentActivity() {
         if (runtime.navigateBack()) return
         runtime.close()
         finish()
+    }
+
+    private fun launchSelectedTaskAndHideHud() {
+        runtime.launchSelectedTask(
+            onLaunchRequestSent = {
+                runtime.close()
+                finish()
+            },
+        )
     }
 
     companion object {

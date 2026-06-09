@@ -67,12 +67,15 @@ class HelperRuntime private constructor(context: Context) {
         moveMenuSelection(-1)
     }
 
-    fun launchSelectedTask() {
+    fun launchSelectedTask(onLaunchRequestSent: () -> Unit = {}) {
         val current = _state.value
         if (current.tasks.isEmpty()) return
         when (current.viewMode) {
             HelperViewMode.PROJECTS -> enterProjectAt(current.menuModel().safeProjectIndex)
-            HelperViewMode.TASKS -> launchTaskAt(current.menuModel().selectedTaskIndex)
+            HelperViewMode.TASKS -> launchTaskAt(
+                index = current.menuModel().selectedTaskIndex,
+                onLaunchRequestSent = onLaunchRequestSent,
+            )
         }
     }
 
@@ -100,7 +103,10 @@ class HelperRuntime private constructor(context: Context) {
         )
     }
 
-    fun launchTaskAt(index: Int) {
+    fun launchTaskAt(
+        index: Int,
+        onLaunchRequestSent: () -> Unit = {},
+    ) {
         val current = _state.value
         val selection = current.menuModel().selectTask(index)
         val task = current.tasks.getOrNull(selection.selectedIndex) ?: return
@@ -109,7 +115,11 @@ class HelperRuntime private constructor(context: Context) {
             lastLaunchTask = task.name,
             lastLaunchSuccess = null,
         )
-        sendLaunchRequest(task, selection.selectedIndex)
+        sendLaunchRequest(
+            task = task,
+            selectedIndex = selection.selectedIndex,
+            onLaunchRequestSent = onLaunchRequestSent,
+        )
     }
 
     fun navigateBack(): Boolean {
@@ -144,6 +154,7 @@ class HelperRuntime private constructor(context: Context) {
     private fun sendLaunchRequest(
         task: TaskerTask,
         selectedIndex: Int,
+        onLaunchRequestSent: () -> Unit,
     ) {
         sendStatus(
             StatusMessage(
@@ -152,6 +163,13 @@ class HelperRuntime private constructor(context: Context) {
                 selectedIndex = selectedIndex,
                 message = "Launch requested",
             ),
+            onNotSent = {
+                _state.value = _state.value.copy(
+                    status = "Phone Bluetooth not connected",
+                    lastLaunchSuccess = false,
+                )
+            },
+            onSent = onLaunchRequestSent,
         )
     }
 
@@ -293,10 +311,13 @@ class HelperRuntime private constructor(context: Context) {
     private fun sendStatus(
         message: StatusMessage,
         onNotSent: (() -> Unit)? = null,
+        onSent: (() -> Unit)? = null,
     ) {
         scope.launch {
             if (!bridge.send(message)) {
                 onNotSent?.invoke()
+            } else {
+                onSent?.invoke()
             }
         }
     }
