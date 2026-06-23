@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.7-bt - 2026-06-23
+
+### Changed
+
+- The phone app no longer starts the foreground Bluetooth bridge just because the UI was opened.
+- The Bluetooth runtime is inverted so the phone listens passively and the glasses HUD connects only while it is open, avoiding phone-side polling that can wake the glasses Bluetooth stack.
+- The glasses HUD now stops its Bluetooth listener when it leaves the foreground, while still keeping the display awake when the HUD is visible.
+- The foreground bridge can now be stopped from the phone UI or notification.
+
 ## v0.2.5-bt - 2026-06-05
 
 Tasker Bridge now uses Bluetooth as its runtime command channel. CXR-L is kept only for one-shot helper setup: installing, updating, and launching the glasses HUD.

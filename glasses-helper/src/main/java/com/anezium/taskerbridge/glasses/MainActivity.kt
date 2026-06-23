@@ -104,6 +104,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations && ::runtime.isInitialized) {
+            runtime.close()
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) {
             return super.dispatchKeyEvent(event)

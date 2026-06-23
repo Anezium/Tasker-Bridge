@@ -55,16 +55,20 @@ class MainActivity : ComponentActivity() {
 
         runtime = BridgeRuntime.get(applicationContext)
         runtime.start()
-        requestPermissionsThenStartService()
+        requestRequiredPermissions()
 
         setContent {
             val state by runtime.state.collectAsState()
             PhoneScreen(
                 state = state,
                 onStartService = { startForegroundBridge() },
+                onStopService = { stopForegroundBridge() },
                 onRefreshTasker = { runtime.refreshTasker(sendToGlasses = state.bluetoothConnected) },
                 onInstallHud = { runtime.installHudFromUi(this) },
-                onLaunchHud = { runtime.launchHudFromUi(this) },
+                onLaunchHud = {
+                    startForegroundBridge()
+                    runtime.launchHudFromUi(this)
+                },
                 onForgetBluetoothPairing = { runtime.forgetBluetoothPairing() },
             )
         }
@@ -84,24 +88,23 @@ class MainActivity : ComponentActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSIONS_REQUEST_CODE) {
-            startForegroundBridge()
-        }
     }
 
-    private fun requestPermissionsThenStartService() {
+    private fun requestRequiredPermissions() {
         val missing = requiredPermissions().filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), PERMISSIONS_REQUEST_CODE)
-            return
         }
-        startForegroundBridge()
     }
 
     private fun startForegroundBridge() {
         runCatching { BridgeForegroundService.start(this) }
+    }
+
+    private fun stopForegroundBridge() {
+        runCatching { BridgeForegroundService.stop(this) }
     }
 
     companion object {
@@ -113,6 +116,7 @@ class MainActivity : ComponentActivity() {
 private fun PhoneScreen(
     state: PhoneUiState,
     onStartService: () -> Unit,
+    onStopService: () -> Unit,
     onRefreshTasker: () -> Unit,
     onInstallHud: () -> Unit,
     onLaunchHud: () -> Unit,
@@ -165,7 +169,8 @@ private fun PhoneScreen(
                         StatusRow("Pairing", state.bluetoothPairingLabel(), state.bluetoothPaired)
                         StatusRow("HUD connection", state.bluetoothHudLabel(), state.bluetoothConnected)
                         SmallText(state.bluetoothStatus.ifBlank { state.lastStatus })
-                        OutlinedBridgeButton("Start background bridge", true, onStartService)
+                        OutlinedBridgeButton("Start background bridge", !state.bridgeServiceActive, onStartService)
+                        OutlinedBridgeButton("Stop background bridge", state.bridgeServiceActive, onStopService)
                         OutlinedBridgeButton(
                             "Forget Bluetooth pairing",
                             state.bluetoothPaired || state.bluetoothConnected,

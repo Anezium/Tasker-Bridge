@@ -3,8 +3,8 @@ package com.anezium.taskerbridge.phone
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
@@ -16,8 +16,8 @@ import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.anezium.taskerbridge.shared.StatusType
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -58,6 +58,9 @@ class BluetoothBridgeServer(
     private var connectJob: Job? = null
 
     @Volatile
+    private var serverSocket: BluetoothServerSocket? = null
+
+    @Volatile
     private var socket: BluetoothSocket? = null
 
     @Volatile
@@ -65,7 +68,11 @@ class BluetoothBridgeServer(
 
     fun start() {
         if (connectJob?.isActive == true) return
-        connectJob = scope.launch { reconnectLoop() }
+        connectJob = scope.launch { acceptLoop() }
+    }
+
+    fun wakeForHudLaunch() {
+        start()
     }
 
     fun stop() {
@@ -73,6 +80,7 @@ class BluetoothBridgeServer(
             connectJob?.cancelAndJoin()
             connectJob = null
             closeSocket()
+            closeServer()
             onState(
                 BluetoothServerState(
                     active = false,
@@ -115,23 +123,22 @@ class BluetoothBridgeServer(
         }
     }
 
-    private suspend fun reconnectLoop() {
+    private suspend fun acceptLoop() {
         while (connectJob?.isActive == true) {
-            val connectedSocket = connectToGlasses()
-            if (connectedSocket == null) {
-                delay(RECONNECT_DELAY_MS)
+            val acceptedSocket = waitForGlasses()
+            if (acceptedSocket == null) {
+                delay(SERVER_RETRY_DELAY_MS)
                 continue
             }
-            socket = connectedSocket
-            val activeWriter = BufferedWriter(OutputStreamWriter(connectedSocket.outputStream, Charsets.UTF_8))
-            val reader = BufferedReader(InputStreamReader(connectedSocket.inputStream, Charsets.UTF_8))
+            socket = acceptedSocket
+            val activeWriter = BufferedWriter(OutputStreamWriter(acceptedSocket.outputStream, Charsets.UTF_8))
+            val reader = BufferedReader(InputStreamReader(acceptedSocket.inputStream, Charsets.UTF_8))
             writer = activeWriter
-            val peerName = connectedSocket.remoteDevice.safeName()
-            val peerAddress = connectedSocket.remoteDevice.safeAddress()
-            if (!performHandshake(activeWriter, reader)) {
+            val peerName = acceptedSocket.remoteDevice.safeName()
+            val peerAddress = acceptedSocket.remoteDevice.safeAddress()
+            if (!performHandshake(reader, activeWriter)) {
                 onLog("Rejected incompatible Bluetooth HUD.")
                 closeSocket()
-                delay(RECONNECT_DELAY_MS)
                 continue
             }
             rememberTrustedGlasses(peerAddress)
@@ -164,16 +171,15 @@ class BluetoothBridgeServer(
                         connected = false,
                         paired = hasTrustedGlasses(),
                         pairingMode = !hasTrustedGlasses(),
-                        status = "Looking for HUD",
+                        status = "Waiting for HUD",
                     ),
                 )
-                delay(RECONNECT_DELAY_MS)
             }
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToGlasses(): BluetoothSocket? {
+    private fun waitForGlasses(): BluetoothSocket? {
         val adapter = bluetoothAdapter()
         if (adapter == null) {
             onState(
@@ -215,8 +221,12 @@ class BluetoothBridgeServer(
             return null
         }
 
-        val candidates = candidateDevices(adapter)
-        if (candidates.isEmpty()) {
+        return runCatching {
+            closeServer()
+            serverSocket = adapter.listenUsingRfcommWithServiceRecord(
+                Protocol.BLUETOOTH_SERVICE_NAME,
+                serviceUuid,
+            )
             val paired = hasTrustedGlasses()
             onState(
                 BluetoothServerState(
@@ -224,46 +234,42 @@ class BluetoothBridgeServer(
                     connected = false,
                     paired = paired,
                     pairingMode = !paired,
-                    status = if (paired) {
-                        "Paired HUD not found"
-                    } else {
-                        "Launch HUD to pair Bluetooth"
-                    },
+                    status = if (paired) "Waiting for paired HUD" else "Launch HUD to pair Bluetooth",
                 ),
             )
-            return null
-        }
-
-        runCatching { adapter.cancelDiscovery() }
-        for (device in candidates) {
-            val paired = hasTrustedGlasses()
-            onState(
-                BluetoothServerState(
-                    active = true,
-                    connected = false,
-                    paired = paired,
-                    pairingMode = !paired,
-                    status = if (paired) "Connecting paired HUD" else "Pairing HUD",
-                ),
-            )
-            val connected = runCatching {
-                device.createRfcommSocketToServiceRecord(serviceUuid).also { candidate ->
-                    candidate.connect()
-                }
-            }.getOrElse { error ->
-                Log.d(TAG, "Bluetooth connect failed for candidate device", error)
-                null
+            onLog("Bluetooth phone server listening.")
+            val accepted = serverSocket?.accept() ?: return@runCatching null
+            closeServer()
+            if (!isTrustedGlasses(accepted)) {
+                runCatching { accepted.close() }
+                onLog("Rejected unpaired Bluetooth HUD.")
+                return@runCatching null
             }
-            if (connected != null) return connected
+            accepted
+        }.getOrElse { error ->
+            closeServer()
+            if (connectJob?.isActive == true) {
+                Log.d(TAG, "Bluetooth listener failed", error)
+                onError("Bluetooth listener failed.", error)
+            }
+            null
         }
-        return null
     }
 
     private fun performHandshake(
-        activeWriter: BufferedWriter,
         reader: BufferedReader,
+        activeWriter: BufferedWriter,
     ): Boolean {
         return runCatching {
+            val raw = reader.readLine() ?: return false
+            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
+            val hello = JsonProtocol.decodeStatus(raw)
+            if (hello.type != StatusType.HELLO
+                || hello.protocolVersion != Protocol.PROTOCOL_VERSION
+                || hello.peerRole != Protocol.HELPER_ROLE
+            ) {
+                return false
+            }
             writeLine(
                 activeWriter,
                 JsonProtocol.encodeControl(
@@ -273,12 +279,7 @@ class BluetoothBridgeServer(
                     ),
                 ),
             )
-            val raw = reader.readLine() ?: return false
-            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
-            val hello = JsonProtocol.decodeStatus(raw)
-            hello.type == StatusType.HELLO
-                && hello.protocolVersion == Protocol.PROTOCOL_VERSION
-                && hello.peerRole == Protocol.HELPER_ROLE
+            true
         }.getOrElse { error ->
             Log.d(TAG, "Bluetooth handshake failed", error)
             false
@@ -305,18 +306,6 @@ class BluetoothBridgeServer(
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun candidateDevices(adapter: BluetoothAdapter): List<BluetoothDevice> {
-        migrateTrustedGlasses()
-        val trustedAddress = trustedGlassesAddress()
-        val bondedDevices = adapter.bondedDevices
-            .orEmpty()
-        if (trustedAddress.isNotBlank()) {
-            return bondedDevices.filter { it.safeAddress().equals(trustedAddress, ignoreCase = true) }
-        }
-        return bondedDevices.sortedBy { it.safeAddress() }
-    }
-
     private fun bluetoothAdapter(): BluetoothAdapter? {
         val manager = appContext.getSystemService(BluetoothManager::class.java)
         return manager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
@@ -330,18 +319,28 @@ class BluetoothBridgeServer(
             ) == PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission")
-    private fun BluetoothDevice.safeName(): String =
-        runCatching { name.orEmpty() }.getOrDefault("")
+    private fun android.bluetooth.BluetoothDevice?.safeName(): String =
+        runCatching { this?.name.orEmpty() }.getOrDefault("")
 
     @SuppressLint("MissingPermission")
-    private fun BluetoothDevice.safeAddress(): String =
-        runCatching { address.orEmpty() }.getOrDefault("")
+    private fun android.bluetooth.BluetoothDevice?.safeAddress(): String =
+        runCatching { this?.address.orEmpty() }.getOrDefault("")
 
     private fun trustedGlassesAddress(): String =
         prefs.getString(KEY_TRUSTED_GLASSES_ADDRESS, "").orEmpty()
 
-    private fun hasTrustedGlasses(): Boolean =
-        trustedGlassesAddress().isNotBlank()
+    private fun hasTrustedGlasses(): Boolean {
+        migrateTrustedGlasses()
+        return trustedGlassesAddress().isNotBlank()
+    }
+
+    private fun isTrustedGlasses(socket: BluetoothSocket): Boolean {
+        migrateTrustedGlasses()
+        val trustedAddress = trustedGlassesAddress()
+        if (trustedAddress.isBlank()) return true
+        val address = socket.remoteDevice.safeAddress()
+        return address.equals(trustedAddress, ignoreCase = true)
+    }
 
     private fun migrateTrustedGlasses() {
         if (trustedGlassesAddress().isNotBlank()) return
@@ -358,6 +357,11 @@ class BluetoothBridgeServer(
             .putString(KEY_TRUSTED_GLASSES_ADDRESS, address)
             .putString(KEY_LAST_GLASSES_ADDRESS, address)
             .apply()
+    }
+
+    private fun closeServer() {
+        runCatching { serverSocket?.close() }
+        serverSocket = null
     }
 
     private fun closeSocket() {
@@ -382,6 +386,6 @@ class BluetoothBridgeServer(
         private const val PREFS_NAME = "tasker_bridge_bluetooth"
         private const val KEY_TRUSTED_GLASSES_ADDRESS = "trusted_glasses_address"
         private const val KEY_LAST_GLASSES_ADDRESS = "last_glasses_address"
-        private const val RECONNECT_DELAY_MS = 5_000L
+        private const val SERVER_RETRY_DELAY_MS = 30_000L
     }
 }

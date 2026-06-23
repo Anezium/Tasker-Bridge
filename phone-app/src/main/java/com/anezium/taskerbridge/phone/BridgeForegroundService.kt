@@ -43,12 +43,7 @@ class BridgeForegroundService : Service() {
         startBridgeForeground(runtime.state.value)
         runtime.startBackground()
         watchRuntimeState()
-        return START_STICKY
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        runtime.startBackground()
-        super.onTaskRemoved(rootIntent)
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -98,6 +93,12 @@ class BridgeForegroundService : Service() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, BridgeForegroundService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(com.anezium.taskerbridge.phone.R.drawable.ic_stat_tasker_bridge)
             .setContentTitle("Tasker Bridge")
@@ -107,6 +108,7 @@ class BridgeForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(contentIntent)
+            .addAction(com.anezium.taskerbridge.phone.R.drawable.ic_stat_tasker_bridge, "Stop", stopIntent)
             .build()
     }
 

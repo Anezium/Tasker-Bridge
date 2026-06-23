@@ -3,8 +3,8 @@ package com.anezium.taskerbridge.glasses
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
@@ -16,11 +16,13 @@ import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.anezium.taskerbridge.shared.StatusType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -54,9 +56,6 @@ class BluetoothBridgeClient(
     private var acceptJob: Job? = null
 
     @Volatile
-    private var serverSocket: BluetoothServerSocket? = null
-
-    @Volatile
     private var socket: BluetoothSocket? = null
 
     @Volatile
@@ -64,7 +63,7 @@ class BluetoothBridgeClient(
 
     fun start() {
         if (acceptJob?.isActive == true) return
-        acceptJob = scope.launch { acceptLoop() }
+        acceptJob = scope.launch { connectLoop() }
     }
 
     fun stop() {
@@ -72,7 +71,6 @@ class BluetoothBridgeClient(
             acceptJob?.cancelAndJoin()
             acceptJob = null
             closeSocket()
-            closeServer()
             onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth stopped"))
         }
     }
@@ -90,89 +88,103 @@ class BluetoothBridgeClient(
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun acceptLoop() {
-        val adapter = bluetoothAdapter()
-        if (adapter == null) {
-            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth unavailable"))
-            return
-        }
-        if (!hasConnectPermission()) {
-            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth permission missing"))
-            onError("Grant Bluetooth permission to the glasses helper.", null)
-            return
-        }
-        if (!adapter.isEnabled) {
-            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth disabled"))
-            return
-        }
-
+    private suspend fun connectLoop() {
         while (acceptJob?.isActive == true) {
-            runCatching {
-                closeServer()
-                serverSocket = adapter.listenUsingRfcommWithServiceRecord(
-                    Protocol.BLUETOOTH_SERVICE_NAME,
-                    serviceUuid,
-                )
-                onState(BluetoothClientState(active = true, connected = false, status = "Waiting for phone"))
-                onLog("Bluetooth HUD server listening.")
-                val accepted = serverSocket?.accept() ?: return@runCatching
-                if (!isTrustedPhone(accepted)) {
-                    runCatching { accepted.close() }
-                    onLog("Rejected unpaired Bluetooth phone.")
-                    return@runCatching
-                }
+            val connectedSocket = connectToPhone()
+            if (connectedSocket == null) {
+                delay(RECONNECT_DELAY_MS)
+                continue
+            }
+            socket = connectedSocket
+            val activeWriter = BufferedWriter(OutputStreamWriter(connectedSocket.outputStream, Charsets.UTF_8))
+            val reader = BufferedReader(InputStreamReader(connectedSocket.inputStream, Charsets.UTF_8))
+            writer = activeWriter
+            val peerName = connectedSocket.remoteDevice.safeName()
+            val peerAddress = connectedSocket.remoteDevice.safeAddress()
+            if (!performHandshake(activeWriter, reader)) {
                 closeSocket()
-                socket = accepted
-                val activeWriter = BufferedWriter(OutputStreamWriter(accepted.outputStream, Charsets.UTF_8))
-                val reader = BufferedReader(InputStreamReader(accepted.inputStream, Charsets.UTF_8))
-                writer = activeWriter
-                val peerName = accepted.remoteDevice.safeName()
-                val peerAddress = accepted.remoteDevice.safeAddress()
-                if (!performHandshake(reader, activeWriter)) {
-                    runCatching { accepted.close() }
-                    closeSocket()
-                    onLog("Rejected incompatible Bluetooth phone.")
-                    return@runCatching
-                }
-                rememberTrustedPhone(peerAddress)
-                onState(
-                    BluetoothClientState(
-                        active = true,
-                        connected = true,
-                        peerName = peerName,
-                        peerAddress = peerAddress,
-                        status = "Phone connected",
-                    ),
-                )
-                onLog("Bluetooth phone connected.")
+                onLog("Rejected incompatible Bluetooth phone.")
+                delay(RECONNECT_DELAY_MS)
+                continue
+            }
+            rememberTrustedPhone(peerAddress)
+            onState(
+                BluetoothClientState(
+                    active = true,
+                    connected = true,
+                    peerName = peerName,
+                    peerAddress = peerAddress,
+                    status = "Phone connected",
+                ),
+            )
+            onLog("Bluetooth phone connected.")
+            try {
                 readPhone(reader)
-            }.onFailure { error ->
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 if (acceptJob?.isActive == true) {
-                    onError("Bluetooth server failed.", error)
+                    Log.d(TAG, "Bluetooth phone disconnected", error)
+                    onLog("Bluetooth phone disconnected.")
                 }
             }
             closeSocket()
             if (acceptJob?.isActive == true) {
-                onState(BluetoothClientState(active = true, connected = false, status = "Waiting for phone"))
+                onState(BluetoothClientState(active = true, connected = false, status = "Looking for phone"))
+                delay(RECONNECT_DELAY_MS)
             }
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun connectToPhone(): BluetoothSocket? {
+        val adapter = bluetoothAdapter()
+        if (adapter == null) {
+            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth unavailable"))
+            return null
+        }
+        if (!hasConnectPermission()) {
+            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth permission missing"))
+            onError("Grant Bluetooth permission to the glasses helper.", null)
+            return null
+        }
+        if (!adapter.isEnabled) {
+            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth disabled"))
+            return null
+        }
+
+        val candidates = candidateDevices(adapter)
+        if (candidates.isEmpty()) {
+            onState(BluetoothClientState(active = true, connected = false, status = "Pair phone first"))
+            return null
+        }
+
+        runCatching { adapter.cancelDiscovery() }
+        for (device in candidates) {
+            onState(
+                BluetoothClientState(
+                    active = true,
+                    connected = false,
+                    status = if (trustedPhoneAddress().isBlank()) "Pairing phone" else "Connecting phone",
+                ),
+            )
+            val connected = runCatching {
+                device.createRfcommSocketToServiceRecord(serviceUuid).also { candidate ->
+                    candidate.connect()
+                }
+            }.getOrElse { error ->
+                Log.d(TAG, "Bluetooth connect failed for candidate phone", error)
+                null
+            }
+            if (connected != null) return connected
+        }
+        return null
+    }
+
     private fun performHandshake(
-        reader: BufferedReader,
         activeWriter: BufferedWriter,
+        reader: BufferedReader,
     ): Boolean {
         return runCatching {
-            val raw = reader.readLine() ?: return false
-            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
-            val hello = JsonProtocol.decodeControl(raw)
-            if (hello !is ControlMessage.Hello
-                || hello.protocolVersion != Protocol.PROTOCOL_VERSION
-                || hello.peerRole != Protocol.PHONE_ROLE
-            ) {
-                return false
-            }
             writeLine(
                 activeWriter,
                 JsonProtocol.encodeStatus(
@@ -183,7 +195,12 @@ class BluetoothBridgeClient(
                     ),
                 ),
             )
-            true
+            val raw = reader.readLine() ?: return false
+            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
+            val hello = JsonProtocol.decodeControl(raw)
+            hello is ControlMessage.Hello
+                && hello.protocolVersion == Protocol.PROTOCOL_VERSION
+                && hello.peerRole == Protocol.PHONE_ROLE
         }.getOrElse { error ->
             Log.d(TAG, "Bluetooth handshake failed", error)
             false
@@ -210,6 +227,16 @@ class BluetoothBridgeClient(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun candidateDevices(adapter: BluetoothAdapter): List<BluetoothDevice> {
+        val trustedAddress = trustedPhoneAddress()
+        val bondedDevices = adapter.bondedDevices.orEmpty()
+        if (trustedAddress.isNotBlank()) {
+            return bondedDevices.filter { it.safeAddress().equals(trustedAddress, ignoreCase = true) }
+        }
+        return bondedDevices.sortedBy { it.safeAddress() }
+    }
+
     private fun bluetoothAdapter(): BluetoothAdapter? {
         val manager = appContext.getSystemService(BluetoothManager::class.java)
         return manager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
@@ -225,13 +252,6 @@ class BluetoothBridgeClient(
     private fun trustedPhoneAddress(): String =
         prefs.getString(KEY_TRUSTED_PHONE_ADDRESS, "").orEmpty()
 
-    private fun isTrustedPhone(socket: BluetoothSocket): Boolean {
-        val trustedAddress = trustedPhoneAddress()
-        if (trustedAddress.isBlank()) return true
-        val address = socket.remoteDevice.safeAddress()
-        return address.equals(trustedAddress, ignoreCase = true)
-    }
-
     private fun rememberTrustedPhone(address: String) {
         if (address.isBlank() || trustedPhoneAddress().isNotBlank()) return
         prefs.edit().putString(KEY_TRUSTED_PHONE_ADDRESS, address).apply()
@@ -244,11 +264,6 @@ class BluetoothBridgeClient(
     @SuppressLint("MissingPermission")
     private fun android.bluetooth.BluetoothDevice?.safeAddress(): String =
         runCatching { this?.address.orEmpty() }.getOrDefault("")
-
-    private fun closeServer() {
-        runCatching { serverSocket?.close() }
-        serverSocket = null
-    }
 
     private fun closeSocket() {
         synchronized(writeLock) {
@@ -271,5 +286,6 @@ class BluetoothBridgeClient(
         private const val TAG = "TaskerBridge-BT"
         private const val PREFS_NAME = "tasker_bridge_bluetooth"
         private const val KEY_TRUSTED_PHONE_ADDRESS = "trusted_phone_address"
+        private const val RECONNECT_DELAY_MS = 5_000L
     }
 }

@@ -65,7 +65,7 @@ Tasker Bridge currently targets Android 31+ on the phone.
 3. Accept the Android permissions.
 4. Tap **Install HUD** when the helper needs to be installed or updated.
 5. Tap **Launch HUD** to open it on the glasses.
-6. Keep **Start background bridge** running so the phone can accept HUD commands.
+6. Start the background bridge before using the HUD. Tapping **Launch HUD** also starts it.
 7. On first Bluetooth connection, the phone and HUD remember each other.
 8. On the glasses, swipe to choose a task and tap to launch it.
 
@@ -91,18 +91,18 @@ Phone app
   -> CXR-L disconnects after setup
 
 Glasses helper
-  -> Bluetooth RFCOMM server while HUD is open
+  -> Bluetooth RFCOMM client while HUD is open
   -> sends READY / REQUEST_TASKS
   -> receives TASK_LIST
   -> sends LAUNCH_TASK
 
 Phone app
-  -> foreground connectedDevice service connects to the paired HUD over Bluetooth
+  -> foreground connectedDevice service listens for the HUD over Bluetooth
   -> sends Tasker run broadcast
   -> returns LAUNCH_RESULT
 ```
 
-The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone connects only to the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first phone that connects after install and rejects other Bluetooth clients.
+The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone accepts only the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first compatible phone endpoint after install.
 
 Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOMM service UUID:
 
@@ -111,7 +111,9 @@ Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOM
 
 ## Battery Behavior
 
-The phone bridge is designed to sit idle. It does not hold a wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. The foreground service exists so Android keeps the Bluetooth bridge alive; Tasker refresh happens when the HUD opens/resumes or when the HUD explicitly asks for the task list.
+The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the foreground service by itself; use **Start background bridge** or **Launch HUD** when you want glasses commands available. The foreground service exposes a stop action, and the phone listens passively instead of repeatedly connecting to the glasses while the HUD is closed.
+
+When the glasses HUD is open in the foreground, it keeps the glasses display awake intentionally so the menu remains usable. When the HUD leaves the foreground, it stops the glasses-side Bluetooth listener.
 
 If the phone app is force-stopped from Android settings, the glasses cannot wake it through Bluetooth because the phone-side service no longer exists. Open the phone app again to restart the bridge.
 

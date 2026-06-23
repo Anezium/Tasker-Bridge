@@ -159,6 +159,8 @@ class BridgeRuntime private constructor(context: Context) {
 
     fun launchHudFromUi(activity: Activity) {
         start()
+        bluetooth.start()
+        bluetooth.wakeForHudLaunch()
         cxrSetup.begin(CxrSetupAction.LAUNCH)
         beginCxrSetup(activity)
     }
