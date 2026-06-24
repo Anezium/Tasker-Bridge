@@ -107,29 +107,75 @@ class BridgeRuntime private constructor(context: Context) {
     fun start() {
         if (started) return
         started = true
+        val wake = if (BleWakeServer.isArmed(appContext)) {
+            BleWakeServer.ensureStarted(appContext)
+        } else {
+            null
+        }
         _state.value = _state.value.copy(
             requiredRokidAppInstalled = cxr.isRequiredRokidAppInstalled(appContext),
             authorized = cxr.isAuthorized(),
             helperBundledVersion = cxr.bundledHelperVersionLabel(),
             helperLastInstalledVersion = cxr.lastInstalledHelperVersionLabel(),
-            lastStatus = "Bridge runtime started.",
+            bluetoothServerActive = wake?.active ?: _state.value.bluetoothServerActive,
+            bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
+            lastStatus = wake?.status ?: "Bridge runtime started.",
         )
         refreshTasker(sendToGlasses = false)
     }
 
     fun startBackground() {
         start()
-        bluetooth.start()
+        val wake = BleWakeServer.arm(appContext)
+        _state.value = _state.value.copy(
+            bluetoothServerActive = wake.active,
+            bluetoothPairingMode = false,
+            bluetoothStatus = wake.status,
+            lastStatus = wake.status,
+        )
         refreshTasker(sendToGlasses = false)
     }
 
     fun stopBackground() {
+        BleWakeServer.disarm(appContext)
         bluetooth.stop()
         _state.value = _state.value.copy(
+            bridgeServiceActive = false,
             bluetoothServerActive = false,
             bluetoothConnected = false,
             bluetoothPairingMode = false,
-            bluetoothStatus = "Bluetooth stopped.",
+            bluetoothStatus = "Wake bridge stopped.",
+            lastStatus = "Wake bridge stopped.",
+        )
+    }
+
+    fun startBluetoothSession(reason: String = "BLE wake") {
+        start()
+        val wake = BleWakeServer.ensureStarted(appContext)
+        bluetooth.start()
+        _state.value = _state.value.copy(
+            bridgeServiceActive = true,
+            bluetoothServerActive = true,
+            bluetoothStatus = if (wake.active) "Opening HUD Bluetooth session." else wake.status,
+            lastStatus = "Opening HUD Bluetooth session: $reason",
+        )
+        refreshTasker(sendToGlasses = false)
+    }
+
+    fun stopBluetoothSession() {
+        bluetooth.stop()
+        val wake = if (BleWakeServer.isArmed(appContext)) {
+            BleWakeServer.ensureStarted(appContext)
+        } else {
+            BleWakeState(active = false, status = "BLE wake disabled")
+        }
+        _state.value = _state.value.copy(
+            bridgeServiceActive = false,
+            bluetoothServerActive = wake.active,
+            bluetoothConnected = false,
+            bluetoothPairingMode = false,
+            bluetoothStatus = if (wake.active) "BLE wake armed." else "Bluetooth session stopped.",
+            lastStatus = if (wake.active) "HUD session ended; BLE wake remains armed." else "Bluetooth session stopped.",
         )
     }
 
@@ -159,8 +205,7 @@ class BridgeRuntime private constructor(context: Context) {
 
     fun launchHudFromUi(activity: Activity) {
         start()
-        bluetooth.start()
-        bluetooth.wakeForHudLaunch()
+        startBackground()
         cxrSetup.begin(CxrSetupAction.LAUNCH)
         beginCxrSetup(activity)
     }
@@ -295,15 +340,22 @@ class BridgeRuntime private constructor(context: Context) {
 
     private fun handleBluetoothState(state: BluetoothServerState) {
         val wasConnected = _state.value.bluetoothConnected
+        val wakeArmed = BleWakeServer.isArmed(appContext)
+        val active = state.active || wakeArmed
+        val status = when {
+            state.active -> state.status
+            wakeArmed -> "BLE wake armed"
+            else -> state.status
+        }
         _state.value = _state.value.copy(
-            bluetoothServerActive = state.active,
+            bluetoothServerActive = active,
             bluetoothConnected = state.connected,
             bluetoothPaired = state.paired,
-            bluetoothPairingMode = state.pairingMode,
+            bluetoothPairingMode = state.pairingMode && state.active,
             bluetoothPeerName = state.peerName,
             bluetoothPeerAddress = state.peerAddress,
-            bluetoothStatus = state.status,
-            lastStatus = state.status.ifBlank { _state.value.lastStatus },
+            bluetoothStatus = status,
+            lastStatus = status.ifBlank { _state.value.lastStatus },
         )
         if (state.connected && !wasConnected) {
             sendCachedTasksThenRefresh()
@@ -397,7 +449,7 @@ class BridgeRuntime private constructor(context: Context) {
                 cxrConnected = false,
                 glassBtConnected = false,
                 helperInstallBusy = false,
-                lastStatus = "CXR-L released; Bluetooth runtime remains active.",
+                lastStatus = "CXR-L released; BLE wake remains armed.",
             )
         }
     }

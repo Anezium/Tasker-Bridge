@@ -9,7 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -21,10 +23,12 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class BridgeForegroundService : Service() {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var runtime: BridgeRuntime
     private var notificationJob: Job? = null
     private var lastNotificationText: String = ""
+    private var idleStopRunnable: Runnable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -35,25 +39,26 @@ class BridgeForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             runtime.stopBackground()
+            runtime.markServiceActive(false)
+            stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
         }
 
         runtime.markServiceActive(true)
         startBridgeForeground(runtime.state.value)
-        runtime.startBackground()
+        runtime.startBluetoothSession(
+            intent?.getStringExtra(EXTRA_START_REASON).orEmpty().ifBlank { "HUD wake" },
+        )
         watchRuntimeState()
-        return START_STICKY
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        runtime.startBackground()
-        super.onTaskRemoved(rootIntent)
+        scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         notificationJob?.cancel()
-        runtime.stopBackground()
+        cancelIdleStop()
+        runtime.stopBluetoothSession()
         runtime.markServiceActive(false)
         serviceScope.cancel()
         super.onDestroy()
@@ -70,6 +75,11 @@ class BridgeForegroundService : Service() {
                 if (nextText != lastNotificationText) {
                     lastNotificationText = nextText
                     manager.notify(NOTIFICATION_ID, buildNotification(state))
+                }
+                if (state.bluetoothConnected) {
+                    cancelIdleStop()
+                } else if (state.bridgeServiceActive) {
+                    scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
                 }
             }
         }
@@ -131,19 +141,56 @@ class BridgeForegroundService : Service() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun scheduleIdleStop(delayMs: Long) {
+        cancelIdleStop()
+        idleStopRunnable = Runnable {
+            runtime.stopBluetoothSession()
+            runtime.markServiceActive(false)
+            stopForegroundCompat()
+            stopSelf()
+        }.also { runnable ->
+            mainHandler.postDelayed(runnable, delayMs)
+        }
+    }
+
+    private fun cancelIdleStop() {
+        idleStopRunnable?.let(mainHandler::removeCallbacks)
+        idleStopRunnable = null
+    }
+
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
     companion object {
         private const val CHANNEL_ID = "tasker_bridge"
         private const val NOTIFICATION_ID = 72_410
         private const val ACTION_START = "com.anezium.taskerbridge.phone.action.START_BRIDGE"
         private const val ACTION_STOP = "com.anezium.taskerbridge.phone.action.STOP_BRIDGE"
+        private const val EXTRA_START_REASON = "com.anezium.taskerbridge.phone.extra.START_REASON"
+        private const val SESSION_IDLE_TIMEOUT_MS = 90_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
 
         fun start(context: Context) {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, BridgeForegroundService::class.java).setAction(ACTION_START),
-            )
+            startSession(context, reason = "manual session")
+        }
+
+        fun startSession(context: Context, reason: String = "BLE wake"): Boolean {
+            return runCatching {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, BridgeForegroundService::class.java)
+                        .setAction(ACTION_START)
+                        .putExtra(EXTRA_START_REASON, reason),
+                )
+                true
+            }.getOrDefault(false)
         }
 
         fun stop(context: Context) {
@@ -154,6 +201,7 @@ class BridgeForegroundService : Service() {
 
 private fun PhoneUiState.notificationText(): String = when {
     bluetoothConnected -> "HUD connected, ${tasks.size} tasks ready"
-    bluetoothServerActive -> "Waiting for Tasker Bridge HUD"
-    else -> "Starting Bluetooth bridge"
+    bridgeServiceActive -> "Opening HUD Bluetooth session"
+    bluetoothServerActive -> "BLE wake armed"
+    else -> "Tasker Bridge idle"
 }

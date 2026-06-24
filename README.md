@@ -15,7 +15,7 @@
   </a>
 </p>
 
-Tasker Bridge lets you launch your Android Tasker automations from a simple Rokid Glasses HUD. Install the phone APK, start the bridge, then pick and run your tasks directly from the glasses.
+Tasker Bridge lets you launch your Android Tasker automations from a simple Rokid Glasses HUD. Install the phone APK, arm the wake bridge, then pick and run your tasks directly from the glasses.
 
 <p align="center">
   <a href="assets/screenshots/phone.png"><img src="assets/screenshots/phone.png" width="260" alt="Tasker Bridge phone companion showing the connected HUD and Tasker task list" /></a>
@@ -41,9 +41,9 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes and upgrade details.
 - Launches the selected Tasker task from the glasses.
 - Keeps Tasker access and execution on the Android phone.
 - Uses Global Hi Rokid CXR-L only to install and launch the glasses helper.
-- Uses a lightweight Bluetooth RFCOMM link for HUD task lists and launch commands.
+- Uses a low-power BLE wake signal from the HUD, then a short Bluetooth RFCOMM session for task lists and launch commands.
 - Pairs by the Tasker Bridge Bluetooth service endpoint, not by the device name.
-- Runs a lightweight foreground `connectedDevice` bridge on the phone.
+- Runs a foreground `connectedDevice` session only while the HUD is actively connecting.
 - Refreshes Tasker on HUD open/resume instead of polling forever.
 - Responds cache-first, then refreshes Tasker and only pushes an update if the task list changed.
 
@@ -65,7 +65,7 @@ Tasker Bridge currently targets Android 31+ on the phone.
 3. Accept the Android permissions.
 4. Tap **Install HUD** when the helper needs to be installed or updated.
 5. Tap **Launch HUD** to open it on the glasses.
-6. Start the background bridge before using the HUD. Tapping **Launch HUD** also starts it.
+6. Tap **Arm wake bridge** before using the HUD. Tapping **Launch HUD** also arms it.
 7. On first Bluetooth connection, the phone and HUD remember each other.
 8. On the glasses, swipe to choose a task and tap to launch it.
 
@@ -91,18 +91,21 @@ Phone app
   -> CXR-L disconnects after setup
 
 Glasses helper
+  -> BLE wake client while HUD opens
+  -> writes wake_tasks to the phone
   -> Bluetooth RFCOMM client while HUD is open
   -> sends READY / REQUEST_TASKS
   -> receives TASK_LIST
   -> sends LAUNCH_TASK
 
 Phone app
-  -> foreground connectedDevice service listens for the HUD over Bluetooth
+  -> BLE GATT wake server stays armed after the user enables the bridge
+  -> foreground connectedDevice service opens a short RFCOMM session after wake
   -> sends Tasker run broadcast
   -> returns LAUNCH_RESULT
 ```
 
-The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone accepts only the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first compatible phone endpoint after install.
+The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone accepts only the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first compatible phone endpoint after install. The BLE wake characteristic is only a doorbell; task names and launch commands still travel over the paired RFCOMM session.
 
 Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOMM service UUID:
 
@@ -111,11 +114,11 @@ Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOM
 
 ## Battery Behavior
 
-The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the foreground service by itself; use **Start background bridge** or **Launch HUD** when you want glasses commands available. The foreground service exposes a stop action, and the phone listens passively instead of repeatedly connecting to the glasses while the HUD is closed. The service is sticky so Android can restore the passive listener after background cleanup, unless the user presses Stop.
+The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start a permanent foreground service by itself; use **Arm wake bridge** or **Launch HUD** when you want glasses commands available. While armed, the phone exposes a low-power BLE GATT wake endpoint. When the HUD opens, it writes a small `wake_tasks` request, the phone opens a foreground RFCOMM session, sends/receives Tasker messages, then drops the session after the HUD disconnects or stays idle.
 
 When the glasses HUD is open in the foreground, it keeps the glasses display awake intentionally so the menu remains usable. When the HUD leaves the foreground, it stops the glasses-side Bluetooth listener.
 
-If the phone app is force-stopped from Android settings, the glasses cannot wake it through Bluetooth because the phone-side service no longer exists. Open the phone app again to restart the bridge.
+If the phone app is force-stopped from Android settings, the glasses cannot wake it through Bluetooth because Android clears the app process and receivers. Open the phone app again and tap **Arm wake bridge**.
 
 ## Build
 
@@ -153,8 +156,8 @@ inside the phone APK assets.
 ## Project Layout
 
 ```text
-phone-app/       Android phone companion, Bluetooth bridge, CXR-L setup, Tasker runtime
-glasses-helper/ Rokid glasses HUD, Bluetooth RFCOMM server
+phone-app/       Android phone companion, BLE wake, Bluetooth bridge, CXR-L setup, Tasker runtime
+glasses-helper/ Rokid glasses HUD, BLE wake client, Bluetooth RFCOMM client
 shared/         JSON protocol and shared task models
 assets/         README screenshots and project media
 ```

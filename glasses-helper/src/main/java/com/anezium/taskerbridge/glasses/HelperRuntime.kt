@@ -41,13 +41,23 @@ class HelperRuntime private constructor(context: Context) {
     fun start() {
         if (!started) {
             started = true
+            _state.value = _state.value.copy(bridgeState = "Waking phone")
             bridge.start()
+            BleWakeClient.requestWake(appContext) { ok, message ->
+                onMain {
+                    if (!started) return@onMain
+                    _state.value = _state.value.copy(bridgeState = message)
+                    requestTasks(if (ok) "Phone wake" else "HUD opened")
+                }
+            }
+            return
         }
         requestTasks("HUD opened")
     }
 
     fun close() {
         taskRequestRetryJob?.cancel()
+        BleWakeClient.cancel()
         scope.launch {
             bridge.send(StatusMessage(StatusType.READY, "Helper closing"))
             bridge.stop()

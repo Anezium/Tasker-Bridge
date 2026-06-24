@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.9-preview.1 - 2026-06-24
+
+### Preview
+
+- Replace the always-on sticky RFCOMM listener with a Relay-style BLE wake doorbell.
+- Arm a low-power BLE GATT endpoint on the phone; the glasses HUD writes `wake_tasks` when it opens.
+- Open the foreground `connectedDevice` RFCOMM service only for the active HUD session, then stop it after idle/disconnect.
+- Keep CXR-L as setup-only for installing and launching the glasses helper; runtime task commands do not require an active CXR-L session.
+- Re-arm BLE wake after reboot, app update, Bluetooth-on, or glasses ACL reconnect when the user previously armed the bridge.
+
+### Upgrade Notes
+
+- Install the new phone APK first.
+- Open Tasker Bridge, grant the new Bluetooth advertise permission if Android asks, then tap **Install HUD** to push the bundled helper `0.2.6-preview.1`.
+- Tap **Arm wake bridge** once before testing from the glasses.
+- This is a preview build for battery testing; if Android blocks a background wake on a specific phone firmware, open the phone app once and arm the bridge again.
+
 ## v0.2.8-bt - 2026-06-24
 
 ### Fixed

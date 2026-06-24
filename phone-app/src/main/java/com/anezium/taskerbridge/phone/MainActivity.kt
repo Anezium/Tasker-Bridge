@@ -61,12 +61,12 @@ class MainActivity : ComponentActivity() {
             val state by runtime.state.collectAsState()
             PhoneScreen(
                 state = state,
-                onStartService = { startForegroundBridge() },
-                onStopService = { stopForegroundBridge() },
+                onStartService = { armWakeBridge() },
+                onStopService = { stopWakeBridge() },
                 onRefreshTasker = { runtime.refreshTasker(sendToGlasses = state.bluetoothConnected) },
                 onInstallHud = { runtime.installHudFromUi(this) },
                 onLaunchHud = {
-                    startForegroundBridge()
+                    runtime.startBackground()
                     runtime.launchHudFromUi(this)
                 },
                 onForgetBluetoothPairing = { runtime.forgetBluetoothPairing() },
@@ -99,11 +99,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startForegroundBridge() {
-        runCatching { BridgeForegroundService.start(this) }
+    private fun armWakeBridge() {
+        runtime.startBackground()
     }
 
-    private fun stopForegroundBridge() {
+    private fun stopWakeBridge() {
+        runtime.stopBackground()
         runCatching { BridgeForegroundService.stop(this) }
     }
 
@@ -164,13 +165,13 @@ private fun PhoneScreen(
                     }
 
                     Section("Phone Bridge") {
-                        StatusRow("Background service", if (state.bridgeServiceActive) "running" else "stopped", state.bridgeServiceActive)
-                        StatusRow("Bluetooth", if (state.bluetoothServerActive) "ready" else "off", state.bluetoothServerActive)
+                        StatusRow("Wake bridge", if (state.bluetoothServerActive) "armed" else "off", state.bluetoothServerActive)
+                        StatusRow("Active session", if (state.bridgeServiceActive) "running" else "idle", state.bridgeServiceActive)
                         StatusRow("Pairing", state.bluetoothPairingLabel(), state.bluetoothPaired)
                         StatusRow("HUD connection", state.bluetoothHudLabel(), state.bluetoothConnected)
                         SmallText(state.bluetoothStatus.ifBlank { state.lastStatus })
-                        OutlinedBridgeButton("Start background bridge", !state.bridgeServiceActive, onStartService)
-                        OutlinedBridgeButton("Stop background bridge", state.bridgeServiceActive, onStopService)
+                        OutlinedBridgeButton("Arm wake bridge", !state.bluetoothServerActive, onStartService)
+                        OutlinedBridgeButton("Stop wake bridge", state.bluetoothServerActive || state.bridgeServiceActive, onStopService)
                         OutlinedBridgeButton(
                             "Forget Bluetooth pairing",
                             state.bluetoothPaired || state.bluetoothConnected,
@@ -336,14 +337,15 @@ private fun SmallText(text: String) {
 
 private fun PhoneUiState.bridgeSummary(): String = when {
     bluetoothConnected && taskerReady() -> "HUD connected over Bluetooth, ${tasks.size} Tasker tasks available."
-    bluetoothServerActive -> "Bluetooth bridge is waiting for the glasses HUD."
-    !bridgeServiceActive -> "Start the background bridge to accept glasses commands."
+    bridgeServiceActive -> "HUD Bluetooth session is active."
+    bluetoothServerActive -> "BLE wake is armed; the HUD can wake a short Bluetooth session."
+    !bridgeServiceActive -> "Arm the wake bridge to accept glasses commands."
     else -> lastStatus
 }
 
 private fun PhoneUiState.bluetoothHudLabel(): String = when {
     bluetoothConnected -> "connected"
-    bluetoothServerActive -> "waiting"
+    bridgeServiceActive -> "waiting"
     else -> "offline"
 }
 
@@ -377,6 +379,7 @@ private fun requiredPermissions(): Array<String> = buildList {
     add(TaskerRepository.PERMISSION_RUN_TASKS)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         add(Manifest.permission.BLUETOOTH_CONNECT)
+        add(Manifest.permission.BLUETOOTH_ADVERTISE)
         add(Manifest.permission.BLUETOOTH_SCAN)
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

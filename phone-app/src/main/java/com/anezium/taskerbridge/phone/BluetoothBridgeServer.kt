@@ -71,10 +71,6 @@ class BluetoothBridgeServer(
         connectJob = scope.launch { acceptLoop() }
     }
 
-    fun wakeForHudLaunch() {
-        start()
-    }
-
     fun stop() {
         scope.launch {
             connectJob?.cancelAndJoin()
