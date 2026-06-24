@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.8-bt - 2026-06-24
+
+### Fixed
+
+- Keep the passive phone Bluetooth bridge sticky so Android can restore the listener after the service is killed in the background.
+- Preserve the explicit Stop action as non-sticky so users can still turn off the foreground bridge intentionally.
+
 ## v0.2.7-bt - 2026-06-23
 
 ### Changed

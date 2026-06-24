@@ -111,7 +111,7 @@ Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOM
 
 ## Battery Behavior
 
-The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the foreground service by itself; use **Start background bridge** or **Launch HUD** when you want glasses commands available. The foreground service exposes a stop action, and the phone listens passively instead of repeatedly connecting to the glasses while the HUD is closed.
+The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the foreground service by itself; use **Start background bridge** or **Launch HUD** when you want glasses commands available. The foreground service exposes a stop action, and the phone listens passively instead of repeatedly connecting to the glasses while the HUD is closed. The service is sticky so Android can restore the passive listener after background cleanup, unless the user presses Stop.
 
 When the glasses HUD is open in the foreground, it keeps the glasses display awake intentionally so the menu remains usable. When the HUD leaves the foreground, it stops the glasses-side Bluetooth listener.
 

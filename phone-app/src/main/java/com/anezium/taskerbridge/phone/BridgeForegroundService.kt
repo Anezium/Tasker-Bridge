@@ -43,7 +43,12 @@ class BridgeForegroundService : Service() {
         startBridgeForeground(runtime.state.value)
         runtime.startBackground()
         watchRuntimeState()
-        return START_NOT_STICKY
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        runtime.startBackground()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
