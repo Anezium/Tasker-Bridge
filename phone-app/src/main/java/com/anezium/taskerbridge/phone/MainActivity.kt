@@ -104,6 +104,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::runtime.isInitialized) {
+            runtime.refreshDiagnostics()
+        }
+    }
+
     private fun armWakeBridge() {
         runtime.armWakeBridgeFromUi(this)
     }

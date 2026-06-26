@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.13 - 2026-06-26
+
+### Preview Fix
+
+- Refresh the phone wake diagnostics whenever the phone app is opened or resumed, so the `Wake debug ...` line reflects the latest long-idle failure instead of a stale runtime snapshot.
+- Keep the HUD retry loop from cancelling and recreating itself while a wake request is already in flight.
+- Reset the helper task-list freshness cache when the HUD opens or closes, forcing a fresh task request on every new HUD session.
+- Extend foreground HUD retries to keep sending short wake beacons and task requests for roughly two minutes while the user is visibly waiting.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.9` reaches the glasses, then tap **Arm wake bridge**.
+- If long-idle launch still fails, open the phone app immediately and send the refreshed `Wake debug ...` line from the Phone Bridge section.
+- This still does not add glasses background work; the longer retry window only runs while the HUD is open.
+
 ## v0.2.9-preview.12 - 2026-06-26
 
 ### Preview Fix

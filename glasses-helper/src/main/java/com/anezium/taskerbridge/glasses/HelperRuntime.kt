@@ -43,6 +43,8 @@ class HelperRuntime private constructor(context: Context) {
     fun start() {
         if (!started) {
             started = true
+            taskListReceived = false
+            lastTaskListReceivedAtMs = 0L
             _state.value = _state.value.copy(bridgeState = "Waking phone")
             bridge.start()
             requestPhoneWake("HUD opened")
@@ -57,8 +59,10 @@ class HelperRuntime private constructor(context: Context) {
         taskRequestRetryJob?.cancel()
         taskRequestRetryJob = null
         wakeRequestInFlight = false
+        taskListReceived = false
         lastTaskRequestAtMs = 0L
         lastWakeRequestAtMs = 0L
+        lastTaskListReceivedAtMs = 0L
         BleWakeAdvertiser.cancel()
         BleWakeClient.cancel()
         bridge.stop()
@@ -320,7 +324,7 @@ class HelperRuntime private constructor(context: Context) {
         }
         val now = SystemClock.elapsedRealtime()
         if (wakeRequestInFlight || now - lastWakeRequestAtMs < WAKE_REQUEST_MIN_INTERVAL_MS) {
-            requestTasks(reason)
+            sendTaskRequest(reason)
             return
         }
         wakeRequestInFlight = true
@@ -375,7 +379,15 @@ class HelperRuntime private constructor(context: Context) {
         private const val TASK_REQUEST_MIN_INTERVAL_MS = 1_000L
         private const val WAKE_REQUEST_MIN_INTERVAL_MS = 12_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
-        private val REQUEST_RETRY_DELAYS_MS = longArrayOf(1_500L, 3_500L, 7_000L, 12_000L, 20_000L)
+        private val REQUEST_RETRY_DELAYS_MS = longArrayOf(
+            1_500L,
+            3_500L,
+            7_000L,
+            12_000L,
+            20_000L,
+            30_000L,
+            45_000L,
+        )
     }
 }
 

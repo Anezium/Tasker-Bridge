@@ -106,8 +106,19 @@ class BridgeRuntime private constructor(context: Context) {
     )
 
     fun start() {
-        if (started) return
-        started = true
+        val firstStart = !started
+        if (firstStart) {
+            started = true
+        }
+        refreshRuntimeState(if (firstStart) "Bridge runtime started." else _state.value.lastStatus)
+        refreshTasker(sendToGlasses = false)
+    }
+
+    fun refreshDiagnostics() {
+        refreshRuntimeState(_state.value.lastStatus)
+    }
+
+    private fun refreshRuntimeState(defaultStatus: String) {
         val companionLinked = CompanionDeviceCoordinator.hasAssociation(appContext)
         if (companionLinked) {
             CompanionDeviceCoordinator.startObserving(appContext)
@@ -126,9 +137,8 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothServerActive = wake?.active ?: _state.value.bluetoothServerActive,
             bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
             wakeDiagnostics = BridgeDiagnostics.summary(appContext),
-            lastStatus = wake?.status ?: "Bridge runtime started.",
+            lastStatus = wake?.status ?: defaultStatus,
         )
-        refreshTasker(sendToGlasses = false)
     }
 
     fun startBackground() {
