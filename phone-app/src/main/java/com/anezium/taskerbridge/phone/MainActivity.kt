@@ -177,6 +177,7 @@ private fun PhoneScreen(
                         StatusRow("Pairing", state.bluetoothPairingLabel(), state.bluetoothPaired)
                         StatusRow("HUD connection", state.bluetoothHudLabel(), state.bluetoothConnected)
                         SmallText(state.bluetoothStatus.ifBlank { state.lastStatus })
+                        SmallText(state.wakeDiagnostics)
                         OutlinedBridgeButton(
                             if (state.companionLinked) "Arm wake bridge" else "Link glasses for wake",
                             !state.bluetoothServerActive || !state.companionLinked,

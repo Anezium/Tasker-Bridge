@@ -169,6 +169,7 @@ class BluetoothBridgeServer(
                 ),
             )
             onLog("Bluetooth HUD connected.")
+            BridgeDiagnostics.record(appContext, "HUD RFCOMM connected")
             try {
                 readGlasses(reader, loopJob)
             } catch (error: Throwable) {
@@ -256,6 +257,7 @@ class BluetoothBridgeServer(
                 ),
             )
             onLog("Bluetooth phone server listening.")
+            BridgeDiagnostics.record(appContext, "RFCOMM listener waiting")
             val accepted = activeListener.accept() ?: return@runCatching null
             closeServer(activeListener)
             if (!serverLoopActive(loopJob)) {

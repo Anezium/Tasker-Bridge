@@ -20,6 +20,7 @@ data class PhoneUiState(
     val helperInstallBusy: Boolean = false,
     val helperBundledVersion: String = "unknown",
     val helperLastInstalledVersion: String = "none recorded",
+    val wakeDiagnostics: String = "",
     val taskerInstalled: Boolean = false,
     val taskerEnabled: Boolean = false,
     val externalAccess: Boolean = false,

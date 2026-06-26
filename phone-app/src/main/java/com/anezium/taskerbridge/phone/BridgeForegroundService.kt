@@ -50,6 +50,7 @@ class BridgeForegroundService : Service() {
             }
 
             ACTION_START -> {
+                BridgeDiagnostics.record(this, "Foreground session start requested")
                 runtime.markServiceActive(true)
                 startBridgeForeground(runtime.state.value)
                 runtime.startBluetoothSession(
@@ -246,8 +247,15 @@ class BridgeForegroundService : Service() {
                     Intent(context, BridgeForegroundService::class.java)
                         .setAction(ACTION_ARM_WAKE),
                 )
+                BridgeDiagnostics.record(context, "Foreground wake service armed")
                 true
-            }.getOrDefault(false)
+            }.getOrElse { error ->
+                BridgeDiagnostics.recordSessionStartFailure(
+                    context,
+                    "Arm wake service failed: ${error.javaClass.simpleName}",
+                )
+                false
+            }
         }
 
         fun startSession(context: Context, reason: String = "BLE wake"): Boolean {
@@ -258,8 +266,15 @@ class BridgeForegroundService : Service() {
                         .setAction(ACTION_START)
                         .putExtra(EXTRA_START_REASON, reason),
                 )
+                BridgeDiagnostics.record(context, "Foreground session start posted: $reason")
                 true
-            }.getOrDefault(false)
+            }.getOrElse { error ->
+                BridgeDiagnostics.recordSessionStartFailure(
+                    context,
+                    "Session start failed: ${error.javaClass.simpleName}",
+                )
+                false
+            }
         }
 
         fun stop(context: Context) {

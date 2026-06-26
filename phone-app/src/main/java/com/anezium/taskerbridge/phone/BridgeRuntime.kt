@@ -125,6 +125,7 @@ class BridgeRuntime private constructor(context: Context) {
             companionLinked = companionLinked,
             bluetoothServerActive = wake?.active ?: _state.value.bluetoothServerActive,
             bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = wake?.status ?: "Bridge runtime started.",
         )
         refreshTasker(sendToGlasses = false)
@@ -143,6 +144,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothPairingMode = false,
             bluetoothStatus = if (companionLinked) wake.status else "${wake.status}; companion link needed",
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = if (companionLinked) wake.status else "Link glasses for reliable background wake.",
         )
         refreshTasker(sendToGlasses = false)
@@ -211,6 +213,7 @@ class BridgeRuntime private constructor(context: Context) {
             bridgeServiceActive = true,
             bluetoothServerActive = true,
             bluetoothStatus = if (wake.active) "Opening HUD Bluetooth session." else wake.status,
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = "Opening HUD Bluetooth session: $reason",
         )
         refreshTasker(sendToGlasses = false)
@@ -226,6 +229,7 @@ class BridgeRuntime private constructor(context: Context) {
             companionLinked = companionLinked,
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothStatus = wake.status,
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = if (wake.active) {
                 "BLE wake healthy."
             } else {
@@ -250,6 +254,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothConnected = false,
             bluetoothPairingMode = false,
             bluetoothStatus = if (wake.active) "BLE wake armed." else "Bluetooth session stopped.",
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = if (wake.active) "HUD session ended; BLE wake remains armed." else "Bluetooth session stopped.",
         )
     }
@@ -447,6 +452,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothPeerName = state.peerName,
             bluetoothPeerAddress = state.peerAddress,
             bluetoothStatus = status,
+            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = status.ifBlank { _state.value.lastStatus },
         )
         if (state.connected && !wasConnected) {
@@ -512,7 +518,14 @@ class BridgeRuntime private constructor(context: Context) {
             ),
         )
         if (!sent) {
-            _state.value = _state.value.copy(lastStatus = "Waiting for HUD Bluetooth connection.")
+            BridgeDiagnostics.record(appContext, "Task list send failed: no HUD writer")
+            _state.value = _state.value.copy(
+                lastStatus = "Waiting for HUD Bluetooth connection.",
+                wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            )
+        } else {
+            BridgeDiagnostics.record(appContext, "Task list sent to HUD: ${snapshot.tasks.size}")
+            _state.value = _state.value.copy(wakeDiagnostics = BridgeDiagnostics.summary(appContext))
         }
     }
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.12 - 2026-06-26
+
+### Preview Fix
+
+- Add phone-side wake diagnostics for the long-idle path: last HUD beacon, foreground-session start result, RFCOMM listener state, HUD connection, and task-list delivery are now recorded in the Phone Bridge section.
+- Record foreground-service start failures instead of silently returning false when Android refuses a wake/session start.
+- Record the BLE wake receiver and RFCOMM listener events without logging device identifiers.
+- Surface glasses-side HUD beacon success/failure in the HUD bridge status line so testers can see whether the helper is actually sending the fallback wake signal.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.8` reaches the glasses, then tap **Arm wake bridge**.
+- After a failed long-idle launch, open the phone app and copy the `Wake debug ...` line from the Phone Bridge section.
+- This does not move runtime back to CXR-L; it keeps the BLE wake plus RFCOMM runtime path.
+
 ## v0.2.9-preview.11 - 2026-06-26
 
 ### Preview Fix

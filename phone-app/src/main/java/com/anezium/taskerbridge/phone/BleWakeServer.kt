@@ -203,6 +203,7 @@ object BleWakeServer {
         }
         val results = scanResults(intent)
         Log.i(TAG, "HUD BLE beacon received count=${results.size}")
+        BridgeDiagnostics.recordWake(cleanContext, "HUD BLE beacon received count=${results.size}")
         val now = SystemClock.elapsedRealtime()
         if (now - lastHudBeaconWakeAtMs < HUD_BEACON_WAKE_DEBOUNCE_MS) {
             ensureStarted(cleanContext)
@@ -210,6 +211,10 @@ object BleWakeServer {
         }
         lastHudBeaconWakeAtMs = now
         val started = BridgeForegroundService.startSession(cleanContext, "HUD BLE beacon")
+        BridgeDiagnostics.record(
+            cleanContext,
+            if (started) "HUD beacon posted session start" else "HUD beacon session start failed",
+        )
         ensureStarted(cleanContext)
         return started
     }
@@ -294,10 +299,12 @@ object BleWakeServer {
             hudBeaconScanActive = true
             lastHudBeaconScanFailureCode = null
             Log.i(TAG, "BLE HUD beacon scan armed")
+            BridgeDiagnostics.record(context, "HUD beacon scan armed")
         } else {
             hudBeaconScanActive = false
             lastHudBeaconScanFailureCode = result
             Log.w(TAG, "BLE HUD beacon scan failed code=$result")
+            BridgeDiagnostics.record(context, "HUD beacon scan failed: $result")
         }
     }
 
@@ -361,6 +368,7 @@ object BleWakeServer {
             ?: return false
         if (json.optString("type") != Protocol.BLE_WAKE_TYPE_TASKS) return false
         Log.i(TAG, "BLE task wake received")
+        BridgeDiagnostics.recordWake(context, "BLE task wake write received")
         return BridgeForegroundService.startSession(context)
     }
 
