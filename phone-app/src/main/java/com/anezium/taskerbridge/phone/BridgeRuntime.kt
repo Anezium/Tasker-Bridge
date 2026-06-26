@@ -27,6 +27,7 @@ class BridgeRuntime private constructor(context: Context) {
 
     private var started = false
     private var authorizationRequestInFlight = false
+    private var companionRequestInFlight = false
     private var lastAuthorizationRequestAtMs = 0L
     private var lastHudTaskRequestAtMs = 0L
     private var lastTaskListSentAtMs = 0L
@@ -107,6 +108,10 @@ class BridgeRuntime private constructor(context: Context) {
     fun start() {
         if (started) return
         started = true
+        val companionLinked = CompanionDeviceCoordinator.hasAssociation(appContext)
+        if (companionLinked) {
+            CompanionDeviceCoordinator.startObserving(appContext)
+        }
         val wake = if (BleWakeServer.isArmed(appContext)) {
             BleWakeServer.ensureStarted(appContext)
         } else {
@@ -117,6 +122,7 @@ class BridgeRuntime private constructor(context: Context) {
             authorized = cxr.isAuthorized(),
             helperBundledVersion = cxr.bundledHelperVersionLabel(),
             helperLastInstalledVersion = cxr.lastInstalledHelperVersionLabel(),
+            companionLinked = companionLinked,
             bluetoothServerActive = wake?.active ?: _state.value.bluetoothServerActive,
             bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
             lastStatus = wake?.status ?: "Bridge runtime started.",
@@ -126,14 +132,50 @@ class BridgeRuntime private constructor(context: Context) {
 
     fun startBackground() {
         start()
+        val companionLinked = CompanionDeviceCoordinator.hasAssociation(appContext)
+        if (companionLinked) {
+            CompanionDeviceCoordinator.startObserving(appContext)
+        }
         val wake = BleWakeServer.arm(appContext)
         _state.value = _state.value.copy(
+            companionLinked = companionLinked,
             bluetoothServerActive = wake.active,
             bluetoothPairingMode = false,
-            bluetoothStatus = wake.status,
-            lastStatus = wake.status,
+            bluetoothStatus = if (companionLinked) wake.status else "${wake.status}; companion link needed",
+            lastStatus = if (companionLinked) wake.status else "Link glasses for reliable background wake.",
         )
         refreshTasker(sendToGlasses = false)
+    }
+
+    fun armWakeBridgeFromUi(activity: Activity) {
+        start()
+        if (CompanionDeviceCoordinator.hasAssociation(activity)) {
+            CompanionDeviceCoordinator.startObserving(activity)
+            _state.value = _state.value.copy(companionLinked = true)
+            startBackground()
+            return
+        }
+        if (companionRequestInFlight) return
+        companionRequestInFlight = true
+        _state.value = _state.value.copy(
+            companionLinked = false,
+            bluetoothStatus = "Select your glasses to enable reliable wake.",
+            lastStatus = "Opening Android companion-device link...",
+        )
+        CompanionDeviceCoordinator.requestAssociation(activity) { message ->
+            onMain {
+                companionRequestInFlight = false
+                val linked = CompanionDeviceCoordinator.hasAssociation(appContext)
+                _state.value = _state.value.copy(
+                    companionLinked = linked,
+                    bluetoothStatus = if (linked) "Companion link ready." else message,
+                    lastStatus = if (linked) "Companion link ready." else message,
+                )
+                if (linked) {
+                    startBackground()
+                }
+            }
+        }
     }
 
     fun stopBackground() {
@@ -151,9 +193,14 @@ class BridgeRuntime private constructor(context: Context) {
 
     fun startBluetoothSession(reason: String = "BLE wake") {
         start()
+        val companionLinked = CompanionDeviceCoordinator.hasAssociation(appContext)
+        if (companionLinked) {
+            CompanionDeviceCoordinator.startObserving(appContext)
+        }
         val wake = BleWakeServer.ensureStarted(appContext)
         bluetooth.start()
         _state.value = _state.value.copy(
+            companionLinked = companionLinked,
             bridgeServiceActive = true,
             bluetoothServerActive = true,
             bluetoothStatus = if (wake.active) "Opening HUD Bluetooth session." else wake.status,
@@ -223,6 +270,20 @@ class BridgeRuntime private constructor(context: Context) {
     fun handleAuthorizationResult(resultCode: Int, data: Intent?) {
         authorizationRequestInFlight = false
         cxr.handleAuthorizationResult(resultCode, data)
+    }
+
+    fun handleCompanionAssociationResult(resultCode: Int, data: Intent?) {
+        companionRequestInFlight = false
+        val address = CompanionDeviceCoordinator.handleAssociationResult(appContext, resultCode, data)
+        val linked = address != null || CompanionDeviceCoordinator.hasAssociation(appContext)
+        _state.value = _state.value.copy(
+            companionLinked = linked,
+            bluetoothStatus = if (linked) "Companion link ready." else "Companion link cancelled.",
+            lastStatus = if (linked) "Companion link ready; wake bridge armed." else "Companion link cancelled.",
+        )
+        if (linked) {
+            startBackground()
+        }
     }
 
     fun refreshTasker(sendToGlasses: Boolean = true, skipSendIfFingerprint: String = "") {

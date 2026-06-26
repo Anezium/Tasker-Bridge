@@ -31,8 +31,10 @@ class HelperRuntime private constructor(context: Context) {
 
     private var started = false
     private var taskListReceived = false
+    private var wakeRequestInFlight = false
     private var taskRequestRetryJob: Job? = null
     private var lastTaskRequestAtMs = 0L
+    private var lastWakeRequestAtMs = 0L
     private var lastTaskListReceivedAtMs = 0L
 
     private val _state = MutableStateFlow(HelperUiState())
@@ -43,13 +45,7 @@ class HelperRuntime private constructor(context: Context) {
             started = true
             _state.value = _state.value.copy(bridgeState = "Waking phone")
             bridge.start()
-            BleWakeClient.requestWake(appContext) { ok, message ->
-                onMain {
-                    if (!started) return@onMain
-                    _state.value = _state.value.copy(bridgeState = message)
-                    requestTasks(if (ok) "Phone wake" else "HUD opened")
-                }
-            }
+            requestPhoneWake("HUD opened")
             return
         }
         requestTasks("HUD opened")
@@ -304,7 +300,28 @@ class HelperRuntime private constructor(context: Context) {
             REQUEST_RETRY_DELAYS_MS.forEach { delayMs ->
                 delay(delayMs)
                 if (taskListReceived) return@launch
+                if (!_state.value.phoneConnected) {
+                    requestPhoneWake("Retry wake")
+                }
                 sendTaskRequest("Need task list")
+            }
+        }
+    }
+
+    private fun requestPhoneWake(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (wakeRequestInFlight || now - lastWakeRequestAtMs < WAKE_REQUEST_MIN_INTERVAL_MS) {
+            requestTasks(reason)
+            return
+        }
+        wakeRequestInFlight = true
+        lastWakeRequestAtMs = now
+        BleWakeClient.requestWake(appContext) { ok, message ->
+            onMain {
+                wakeRequestInFlight = false
+                if (!started) return@onMain
+                _state.value = _state.value.copy(bridgeState = message)
+                requestTasks(if (ok) "Phone wake" else reason)
             }
         }
     }
@@ -347,8 +364,9 @@ class HelperRuntime private constructor(context: Context) {
         }
 
         private const val TASK_REQUEST_MIN_INTERVAL_MS = 1_000L
+        private const val WAKE_REQUEST_MIN_INTERVAL_MS = 12_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
-        private val REQUEST_RETRY_DELAYS_MS = longArrayOf(1_500L, 3_500L, 7_000L)
+        private val REQUEST_RETRY_DELAYS_MS = longArrayOf(1_500L, 3_500L, 7_000L, 12_000L, 20_000L)
     }
 }
 

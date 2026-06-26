@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.9-preview.2 - 2026-06-26
+
+### Preview Fix
+
+- Add Android Companion Device Manager linking for the glasses before arming BLE wake.
+- Add a `CompanionDeviceService` so Android can bind Tasker Bridge while the linked glasses are nearby and allow background connected-device wake work.
+- Request the companion background/foreground-service permissions used by the Relay wake path.
+- Re-arm BLE wake from companion presence callbacks, boot/update, Bluetooth-on, and glasses ACL reconnect.
+- Make the glasses HUD retry BLE wake while it is still waiting for the phone, so a late phone re-arm can recover without closing the HUD.
+
+### Upgrade Notes
+
+- Install the new phone APK first.
+- Tap **Install HUD** to push bundled helper `0.2.6-preview.2`.
+- Tap **Link glasses for wake** / **Arm wake bridge** on the phone and accept the Android companion-device prompt.
+- After the companion link is accepted, leave the phone app and test launching the HUD again after a few hours.
+
 ## v0.2.9-preview.1 - 2026-06-24
 
 ### Preview

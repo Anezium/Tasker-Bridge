@@ -27,6 +27,7 @@ class BridgeAutostartReceiver : BroadcastReceiver() {
 
     private fun rearmIfEnabled(context: Context, reason: String) {
         if (!BleWakeServer.isArmed(context)) return
+        CompanionDeviceCoordinator.startObserving(context)
         val state = BleWakeServer.ensureStarted(context)
         Log.i(TAG, "BLE wake rearm after $reason: ${state.status}")
     }

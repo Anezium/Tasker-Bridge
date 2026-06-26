@@ -66,8 +66,11 @@ class MainActivity : ComponentActivity() {
                 onRefreshTasker = { runtime.refreshTasker(sendToGlasses = state.bluetoothConnected) },
                 onInstallHud = { runtime.installHudFromUi(this) },
                 onLaunchHud = {
-                    runtime.startBackground()
-                    runtime.launchHudFromUi(this)
+                    if (CompanionDeviceCoordinator.hasAssociation(this)) {
+                        runtime.launchHudFromUi(this)
+                    } else {
+                        runtime.armWakeBridgeFromUi(this)
+                    }
                 },
                 onForgetBluetoothPairing = { runtime.forgetBluetoothPairing() },
             )
@@ -79,6 +82,8 @@ class MainActivity : ComponentActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == CxrPhoneController.AUTH_REQUEST_CODE) {
             runtime.handleAuthorizationResult(resultCode, data)
+        } else if (requestCode == CompanionDeviceCoordinator.REQUEST_CODE) {
+            runtime.handleCompanionAssociationResult(resultCode, data)
         }
     }
 
@@ -100,7 +105,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun armWakeBridge() {
-        runtime.startBackground()
+        runtime.armWakeBridgeFromUi(this)
     }
 
     private fun stopWakeBridge() {
@@ -165,12 +170,17 @@ private fun PhoneScreen(
                     }
 
                     Section("Phone Bridge") {
+                        StatusRow("Companion link", if (state.companionLinked) "linked" else "needed", state.companionLinked)
                         StatusRow("Wake bridge", if (state.bluetoothServerActive) "armed" else "off", state.bluetoothServerActive)
                         StatusRow("Active session", if (state.bridgeServiceActive) "running" else "idle", state.bridgeServiceActive)
                         StatusRow("Pairing", state.bluetoothPairingLabel(), state.bluetoothPaired)
                         StatusRow("HUD connection", state.bluetoothHudLabel(), state.bluetoothConnected)
                         SmallText(state.bluetoothStatus.ifBlank { state.lastStatus })
-                        OutlinedBridgeButton("Arm wake bridge", !state.bluetoothServerActive, onStartService)
+                        OutlinedBridgeButton(
+                            if (state.companionLinked) "Arm wake bridge" else "Link glasses for wake",
+                            !state.bluetoothServerActive || !state.companionLinked,
+                            onStartService,
+                        )
                         OutlinedBridgeButton("Stop wake bridge", state.bluetoothServerActive || state.bridgeServiceActive, onStopService)
                         OutlinedBridgeButton(
                             "Forget Bluetooth pairing",
@@ -338,6 +348,7 @@ private fun SmallText(text: String) {
 private fun PhoneUiState.bridgeSummary(): String = when {
     bluetoothConnected && taskerReady() -> "HUD connected over Bluetooth, ${tasks.size} Tasker tasks available."
     bridgeServiceActive -> "HUD Bluetooth session is active."
+    !companionLinked -> "Link the glasses with Android Companion Device for reliable wake."
     bluetoothServerActive -> "BLE wake is armed; the HUD can wake a short Bluetooth session."
     !bridgeServiceActive -> "Arm the wake bridge to accept glasses commands."
     else -> lastStatus

@@ -8,6 +8,7 @@ data class PhoneUiState(
     val bluetoothConnected: Boolean = false,
     val bluetoothPaired: Boolean = false,
     val bluetoothPairingMode: Boolean = false,
+    val companionLinked: Boolean = false,
     val bluetoothPeerName: String = "",
     val bluetoothPeerAddress: String = "",
     val bluetoothStatus: String = "Bluetooth idle.",
