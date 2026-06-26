@@ -10,9 +10,14 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
 import android.util.Log
+import com.anezium.taskerbridge.shared.ControlMessage
+import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
+import com.anezium.taskerbridge.shared.StatusMessage
+import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk
+import com.rokid.cxr.link.callbacks.ICustomCmdCbk
 import com.rokid.cxr.link.callbacks.IGlassAppCbk
 import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.cxr.link.utils.GlassInfo
@@ -36,6 +41,7 @@ class CxrPhoneController(
     private val onInstallStatus: (message: String, busy: Boolean) -> Unit,
     private val onHelperInstalled: (Boolean) -> Unit = {},
     private val onHelperOpened: (Boolean) -> Unit = {},
+    private val onCxrStatus: (StatusMessage) -> Unit = {},
     private val onLog: (String) -> Unit,
     private val onError: (String, Throwable?) -> Unit,
 ) {
@@ -70,6 +76,17 @@ class CxrPhoneController(
         override fun onGlassDeviceInfo(deviceInfo: GlassInfo) = Unit
         override fun onGlassWearingStatus(wearing: Boolean) = Unit
         override fun onGlassAiInterrupt(interruptWake: Boolean) = Unit
+    }
+
+    private val commandCallback = object : ICustomCmdCbk {
+        override fun onCustomCmdResult(key: String, payload: ByteArray) {
+            if (key != Protocol.STATUS_CHANNEL) return
+            val raw = decodePayload(payload)
+            if (raw.isBlank()) return
+            runCatching { JsonProtocol.decodeStatus(raw) }
+                .onSuccess(onCxrStatus)
+                .onFailure { Log.w(TAG, "Bad CXR status payload", it) }
+        }
     }
 
     private val appCallback = object : IGlassAppCbk {
@@ -131,6 +148,9 @@ class CxrPhoneController(
     fun isAuthorized(): Boolean = token.isNotBlank()
 
     fun isConnected(): Boolean = cxrConnected || btConnected
+
+    fun canStartRuntimeFallback(): Boolean =
+        token.isNotBlank() && isWifiEnabled()
 
     fun bundledHelperVersionLabel(): String =
         readBundledHelperInfo()?.label ?: "unknown"
@@ -202,6 +222,7 @@ class CxrPhoneController(
                 ),
             )
             setCXRLinkCbk(linkCallback)
+            setCXRCustomCmdCbk(commandCallback)
         }
         link = nextLink
         cxrConnected = false
@@ -330,6 +351,22 @@ class CxrPhoneController(
         link?.appStop(appCallback) ?: onError("CXR-L is not connected.", null)
     }
 
+    fun sendControl(message: ControlMessage): Boolean {
+        val activeLink = link ?: return false
+        if (!cxrConnected || !btConnected) return false
+        val raw = JsonProtocol.encodeControl(message)
+        return runCatching {
+            val result = activeLink.sendCustomCmd(
+                Protocol.CONTROL_CHANNEL,
+                Caps().apply { write(raw) },
+            )
+            result != null && result >= 0
+        }.getOrElse {
+            Log.w(TAG, "CXR control send failed", it)
+            false
+        }
+    }
+
     private fun helperApkCandidates(): List<File> {
         val appContext = context.applicationContext
         return listOfNotNull(
@@ -377,6 +414,17 @@ class CxrPhoneController(
             onInstallStatus("Helper upload failed. Retry install.", false)
             onError("Helper upload failed.", it)
         }
+    }
+
+    private fun decodePayload(payload: ByteArray): String {
+        val raw = payload.toString(Charsets.UTF_8).trim()
+        if (raw.startsWith("{")) return raw
+        val serialized = runCatching {
+            val caps = Caps.fromBytes(payload)
+            if (caps.size() > 0) caps.at(0).string else ""
+        }.getOrDefault("")
+        if (serialized.isNotBlank()) return serialized
+        return raw
     }
 
     private fun bindGlobalHiRokidService(link: CXRLink, authToken: String): Boolean {

@@ -518,7 +518,7 @@ private fun StatusLine(state: HelperUiState) {
 }
 
 private fun HelperUiState.headerSubtitle(): String = when {
-    !phoneConnected -> "Waiting for phone Bluetooth"
+    !phoneConnected -> "Waiting for phone link"
     !taskerInstalled -> "Tasker not detected on phone"
     !taskerEnabled -> "Tasker disabled"
     !externalAccess -> "External access off"

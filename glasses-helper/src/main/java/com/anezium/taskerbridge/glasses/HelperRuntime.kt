@@ -28,8 +28,15 @@ class HelperRuntime private constructor(context: Context) {
         onLog = { message -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
         onError = { message, _ -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
     )
+    private val cxr = CxrFallbackBridge(
+        onState = { state -> onMain { handleCxrState(state) } },
+        onMessage = { message -> onMain { handleControlMessage(message) } },
+        onLog = { message -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
+    )
 
     private var started = false
+    private var bluetoothConnected = false
+    private var cxrConnected = false
     private var taskListReceived = false
     private var wakeRequestInFlight = false
     private var taskRequestRetryJob: Job? = null
@@ -48,6 +55,7 @@ class HelperRuntime private constructor(context: Context) {
             lastTaskListReceivedAtMs = 0L
             _state.value = _state.value.copy(bridgeState = "Waking phone")
             bridge.start()
+            cxr.start()
             requestPhoneWake("HUD opened")
             return
         }
@@ -68,6 +76,7 @@ class HelperRuntime private constructor(context: Context) {
         BleWakeAdvertiser.cancel()
         BleWakeClient.cancel()
         bridge.stop()
+        cxr.stop()
         if (!wasStarted) return
     }
 
@@ -156,14 +165,41 @@ class HelperRuntime private constructor(context: Context) {
 
     private fun handleBluetoothState(state: BluetoothClientState) {
         val wasConnected = _state.value.phoneConnected
+        bluetoothConnected = state.connected
         _state.value = _state.value.copy(
-            phoneConnected = state.connected,
-            phoneName = state.peerName,
-            bridgeState = state.status,
+            phoneConnected = bluetoothConnected || cxrConnected,
+            phoneName = when {
+                bluetoothConnected -> state.peerName
+                cxrConnected -> "CXR-L"
+                else -> state.peerName
+            },
+            bridgeState = if (!bluetoothConnected && cxrConnected) {
+                "Phone connected via CXR"
+            } else {
+                state.status
+            },
         )
-        if (state.connected && !wasConnected) {
+        if (_state.value.phoneConnected && !wasConnected) {
             sendStatus(StatusMessage(StatusType.READY, "Helper ready over Bluetooth"))
             requestTasks("Bluetooth connected")
+        }
+    }
+
+    private fun handleCxrState(state: CxrBridgeState) {
+        val wasConnected = _state.value.phoneConnected
+        cxrConnected = state.connected
+        _state.value = _state.value.copy(
+            phoneConnected = bluetoothConnected || cxrConnected,
+            phoneName = if (cxrConnected) "CXR-L" else _state.value.phoneName,
+            bridgeState = if (!cxrConnected && bluetoothConnected) {
+                "Phone connected via Bluetooth"
+            } else {
+                state.status
+            },
+        )
+        if (_state.value.phoneConnected && !wasConnected) {
+            sendStatus(StatusMessage(StatusType.READY, "Helper ready over CXR"))
+            requestTasks("CXR connected")
         }
     }
 
@@ -181,7 +217,7 @@ class HelperRuntime private constructor(context: Context) {
             ),
             onNotSent = {
                 _state.value = _state.value.copy(
-                    status = "Phone Bluetooth not connected",
+                    status = "Phone link not connected",
                     lastLaunchSuccess = false,
                 )
             },
@@ -357,7 +393,7 @@ class HelperRuntime private constructor(context: Context) {
         if (now - lastTaskRequestAtMs < TASK_REQUEST_MIN_INTERVAL_MS) return
         lastTaskRequestAtMs = now
         sendStatus(StatusMessage(StatusType.REQUEST_TASKS, reason)) {
-            _state.value = _state.value.copy(bridgeState = "Waiting for phone Bluetooth")
+            _state.value = _state.value.copy(bridgeState = "Waiting for phone link")
         }
     }
 
@@ -367,7 +403,8 @@ class HelperRuntime private constructor(context: Context) {
         onSent: (() -> Unit)? = null,
     ) {
         scope.launch {
-            if (!bridge.send(message)) {
+            val sent = bridge.send(message) || cxr.send(message)
+            if (!sent) {
                 onNotSent?.invoke()
             } else {
                 onSent?.invoke()

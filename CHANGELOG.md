@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.21 - 2026-06-26
+
+### Preview Fix
+
+- Add a CXR-L/CXR-S task transport fallback for the visible HUD session: if BLE wake starts the phone but RFCOMM does not deliver the task list, the phone can send the same Tasker protocol over CXR.
+- Keep the battery model conservative: the glasses CXR bridge starts only when the Tasker Bridge HUD opens and is stopped by the existing HUD close/onStop path.
+- Make HUD status copy transport-neutral, so testers see `Waiting for phone link` instead of a Bluetooth-only message when CXR fallback is also available.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.12` reaches the glasses, then tap **Arm wake bridge**.
+- This is still not a background CXR keepalive. BLE wake remains the idle path; CXR is used only during the active HUD session as a fallback writer.
+- If long-idle launch still fails, send whether the phone has Hi Rokid authorization/Wi-Fi enabled, the `Wake debug ...` line, and the HUD status text.
+
 ## v0.2.9-preview.20 - 2026-06-26
 
 ### Preview Fix

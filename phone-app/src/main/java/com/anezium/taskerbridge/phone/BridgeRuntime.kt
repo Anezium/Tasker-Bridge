@@ -96,12 +96,13 @@ class BridgeRuntime private constructor(context: Context) {
                 cxrSetup.finishOperation()
                 if (opened) {
                     _state.value = _state.value.copy(
-                        lastStatus = "HUD opened. Bluetooth will handle Tasker commands.",
+                        lastStatus = "HUD opened. Phone link will handle Tasker commands.",
                     )
                 }
                 releaseCxrSoon()
             }
         },
+        onCxrStatus = { message -> onMain { handleHelperMessage(message) } },
         onLog = { message -> onMain { _state.value = _state.value.copy(lastStatus = message) } },
         onError = { message, _ -> onMain { setError(message) } },
     )
@@ -223,6 +224,9 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.ensureStarted(appContext)
+        if (cxrSetup.isIdle() && cxr.canStartRuntimeFallback()) {
+            cxr.connect()
+        }
         if (
             _state.value.bluetoothConnected &&
             SystemClock.elapsedRealtime() - lastBluetoothConnectedAtMs < FRESH_BLUETOOTH_CONNECTION_MS
@@ -235,9 +239,9 @@ class BridgeRuntime private constructor(context: Context) {
             companionLinked = companionLinked,
             bridgeServiceActive = true,
             bluetoothServerActive = true,
-            bluetoothStatus = if (wake.active) "Opening HUD Bluetooth session." else wake.status,
+            bluetoothStatus = if (wake.active) "Opening HUD session." else wake.status,
             wakeDiagnostics = BridgeDiagnostics.summary(appContext),
-            lastStatus = "Opening HUD Bluetooth session: $reason",
+            lastStatus = "Opening HUD session: $reason",
         )
         refreshTasker(sendToGlasses = false)
     }
@@ -269,6 +273,9 @@ class BridgeRuntime private constructor(context: Context) {
         } else {
             bluetooth.stopSessionCallback()
         }
+        if (cxrSetup.isIdle()) {
+            cxr.disconnect()
+        }
         val wake = if (BleWakeServer.isArmed(appContext)) {
             BleWakeServer.ensureStarted(appContext)
         } else {
@@ -282,9 +289,9 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothServerActive = wake.active,
             bluetoothConnected = false,
             bluetoothPairingMode = false,
-            bluetoothStatus = if (wake.active) "BLE wake armed." else "Bluetooth session stopped.",
+            bluetoothStatus = if (wake.active) "BLE wake armed." else "HUD session stopped.",
             wakeDiagnostics = BridgeDiagnostics.summary(appContext),
-            lastStatus = if (wake.active) "HUD session ended; BLE wake remains armed." else "Bluetooth session stopped.",
+            lastStatus = if (wake.active) "HUD session ended; BLE wake remains armed." else "HUD session stopped.",
         )
     }
 
@@ -401,15 +408,14 @@ class BridgeRuntime private constructor(context: Context) {
                 lastStatus = result.message,
                 error = if (result.success) "" else result.message,
             )
-            val delivered = bluetooth.send(
-                ControlMessage.LaunchResult(
-                    taskName = result.taskName,
-                    success = result.success,
-                    message = result.message,
-                ),
+            val resultMessage = ControlMessage.LaunchResult(
+                taskName = result.taskName,
+                success = result.success,
+                message = result.message,
             )
+            val delivered = bluetooth.send(resultMessage) || cxr.sendControl(resultMessage)
             if (!delivered) {
-                _state.value = _state.value.copy(lastStatus = "Waiting for HUD Bluetooth connection.")
+                _state.value = _state.value.copy(lastStatus = "Waiting for HUD connection.")
             }
             refreshTasker(sendToGlasses = false)
         }
@@ -526,7 +532,7 @@ class BridgeRuntime private constructor(context: Context) {
             }
             StatusType.ERROR -> setError(message.message)
             StatusType.HELLO -> {
-                _state.value = _state.value.copy(lastStatus = "HUD Bluetooth handshake complete.")
+                _state.value = _state.value.copy(lastStatus = "HUD handshake complete.")
             }
             StatusType.UNKNOWN -> {
                 _state.value = _state.value.copy(lastStatus = "Ignored unknown HUD message.")
@@ -539,20 +545,19 @@ class BridgeRuntime private constructor(context: Context) {
 
     private suspend fun sendSnapshotToGlasses(snapshot: TaskerSnapshot) {
         lastTaskListSentAtMs = SystemClock.elapsedRealtime()
-        val sent = bluetooth.send(
-            ControlMessage.TaskList(
-                tasks = snapshot.tasks,
-                selectedIndex = _state.value.selectedIndex.coerceInTaskBounds(snapshot.tasks),
-                taskerInstalled = snapshot.installed,
-                taskerEnabled = snapshot.enabled,
-                externalAccess = snapshot.externalAccess && snapshot.runPermissionGranted,
-                message = snapshot.message,
-            ),
+        val message = ControlMessage.TaskList(
+            tasks = snapshot.tasks,
+            selectedIndex = _state.value.selectedIndex.coerceInTaskBounds(snapshot.tasks),
+            taskerInstalled = snapshot.installed,
+            taskerEnabled = snapshot.enabled,
+            externalAccess = snapshot.externalAccess && snapshot.runPermissionGranted,
+            message = snapshot.message,
         )
+        val sent = bluetooth.send(message) || cxr.sendControl(message)
         if (!sent) {
             BridgeDiagnostics.record(appContext, "Task list send failed: no HUD writer")
             _state.value = _state.value.copy(
-                lastStatus = "Waiting for HUD Bluetooth connection.",
+                lastStatus = "Waiting for HUD connection.",
                 wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             )
         } else {
