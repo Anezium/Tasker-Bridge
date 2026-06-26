@@ -266,6 +266,8 @@ class BridgeRuntime private constructor(context: Context) {
     fun stopBluetoothSession() {
         if (!BleWakeServer.isArmed(appContext)) {
             bluetooth.stop()
+        } else {
+            bluetooth.stopSessionCallback()
         }
         val wake = if (BleWakeServer.isArmed(appContext)) {
             BleWakeServer.ensureStarted(appContext)

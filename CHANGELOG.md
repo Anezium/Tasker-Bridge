@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.20 - 2026-06-26
+
+### Preview Fix
+
+- Add a HUD-visible-only reverse RFCOMM fallback: while Tasker Bridge is open on the glasses, the helper also listens for the phone to call back.
+- When a long-idle wake starts a phone HUD session, the phone now both listens for the glasses and briefly tries to connect out to the last trusted glasses address, avoiding stale one-way RFCOMM listener failures.
+- Keep idle battery behavior unchanged: the new glasses listener exists only while the HUD is open and is closed by the existing HUD `close()` path.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.11` reaches the glasses, then tap **Arm wake bridge**.
+- This is still not a CXR-L keepalive. Runtime tasks remain BLE wake plus RFCOMM, with a second RFCOMM direction only during the visible HUD session.
+- If long-idle launch still fails, open the phone app immediately and send the full `Wake debug ...` line plus whether the HUD ever shows phone Bluetooth connected.
+
 ## v0.2.9-preview.19 - 2026-06-26
 
 ### Preview Fix

@@ -3,6 +3,7 @@ package com.anezium.taskerbridge.phone
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
@@ -55,15 +56,22 @@ class BluetoothBridgeServer(
     private val serviceUuid = UUID.fromString(Protocol.BLUETOOTH_SERVICE_UUID)
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val writeLock = Any()
+    private val connectionLock = Any()
 
     @Volatile
     private var connectJob: Job? = null
+
+    @Volatile
+    private var callbackJob: Job? = null
 
     @Volatile
     private var serverSocket: BluetoothServerSocket? = null
 
     @Volatile
     private var socket: BluetoothSocket? = null
+
+    @Volatile
+    private var pendingSocket: BluetoothSocket? = null
 
     @Volatile
     private var writer: BufferedWriter? = null
@@ -77,25 +85,36 @@ class BluetoothBridgeServer(
 
     fun restart() {
         val oldJob = connectJob
+        val oldCallbackJob = callbackJob
         connectJob = null
+        callbackJob = null
         closeSocket()
         closeServer()
         val newJob = scope.launch(start = CoroutineStart.LAZY) {
             oldJob?.cancelAndJoin()
             acceptLoop()
         }
+        val newCallbackJob = scope.launch(start = CoroutineStart.LAZY) {
+            oldCallbackJob?.cancelAndJoin()
+            callbackLoop()
+        }
         connectJob = newJob
+        callbackJob = newCallbackJob
         newJob.start()
+        newCallbackJob.start()
     }
 
     fun stop() {
         val job = connectJob
+        val dialJob = callbackJob
         connectJob = null
+        callbackJob = null
         closeSocket()
         closeServer()
         scope.launch {
             job?.cancelAndJoin()
-            if (connectJob == null) {
+            dialJob?.cancelAndJoin()
+            if (connectJob == null && callbackJob == null) {
                 onState(
                     BluetoothServerState(
                         active = false,
@@ -106,6 +125,15 @@ class BluetoothBridgeServer(
                     ),
                 )
             }
+        }
+    }
+
+    fun stopSessionCallback() {
+        val dialJob = callbackJob
+        callbackJob = null
+        closePendingSocket()
+        scope.launch {
+            dialJob?.cancelAndJoin()
         }
     }
 
@@ -152,7 +180,10 @@ class BluetoothBridgeServer(
                 runCatching { acceptedSocket.close() }
                 break
             }
-            socket = acceptedSocket
+            if (!claimSocket(acceptedSocket)) {
+                runCatching { acceptedSocket.close() }
+                continue
+            }
             val activeWriter = BufferedWriter(OutputStreamWriter(acceptedSocket.outputStream, Charsets.UTF_8))
             val reader = BufferedReader(InputStreamReader(acceptedSocket.inputStream, Charsets.UTF_8))
             writer = activeWriter
@@ -160,7 +191,7 @@ class BluetoothBridgeServer(
             val peerAddress = acceptedSocket.remoteDevice.safeAddress()
             if (!performHandshake(acceptedSocket, reader, activeWriter)) {
                 onLog("Rejected incompatible Bluetooth HUD.")
-                closeSocket()
+                releaseSocket(acceptedSocket)
                 continue
             }
             rememberTrustedGlasses(peerAddress)
@@ -178,7 +209,7 @@ class BluetoothBridgeServer(
             onLog("Bluetooth HUD connected.")
             BridgeDiagnostics.record(appContext, "HUD RFCOMM connected")
             try {
-                readGlasses(reader, loopJob)
+                readGlasses(reader) { serverLoopActive(loopJob) && socket === acceptedSocket }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 if (serverLoopActive(loopJob)) {
@@ -186,7 +217,7 @@ class BluetoothBridgeServer(
                     onLog("Bluetooth HUD disconnected.")
                 }
             }
-            closeSocket()
+            releaseSocket(acceptedSocket)
             if (serverLoopActive(loopJob)) {
                 onState(
                     BluetoothServerState(
@@ -198,6 +229,66 @@ class BluetoothBridgeServer(
                     ),
                 )
             }
+        }
+    }
+
+    private suspend fun callbackLoop() {
+        val loopJob = currentCoroutineContext()[Job]
+        var attempts = 0
+        while (callbackLoopActive(loopJob) && attempts < CALLBACK_CONNECT_ATTEMPTS) {
+            if (socket != null) break
+            val connectedSocket = connectToHudCallback(loopJob)
+            if (connectedSocket == null) {
+                attempts += 1
+                if (!callbackLoopActive(loopJob)) break
+                delay(CALLBACK_RETRY_DELAY_MS)
+                continue
+            }
+            if (!callbackLoopActive(loopJob)) {
+                runCatching { connectedSocket.close() }
+                break
+            }
+            if (!claimSocket(connectedSocket)) {
+                runCatching { connectedSocket.close() }
+                break
+            }
+            val activeWriter = BufferedWriter(OutputStreamWriter(connectedSocket.outputStream, Charsets.UTF_8))
+            val reader = BufferedReader(InputStreamReader(connectedSocket.inputStream, Charsets.UTF_8))
+            writer = activeWriter
+            val peerName = connectedSocket.remoteDevice.safeName()
+            val peerAddress = connectedSocket.remoteDevice.safeAddress()
+            if (!performHandshake(connectedSocket, reader, activeWriter)) {
+                releaseSocket(connectedSocket)
+                onLog("Rejected incompatible Bluetooth HUD callback.")
+                attempts += 1
+                delay(CALLBACK_RETRY_DELAY_MS)
+                continue
+            }
+            rememberTrustedGlasses(peerAddress)
+            onState(
+                BluetoothServerState(
+                    active = true,
+                    connected = true,
+                    paired = true,
+                    pairingMode = false,
+                    peerName = peerName,
+                    peerAddress = peerAddress,
+                    status = "HUD connected",
+                ),
+            )
+            onLog("Bluetooth HUD connected by callback.")
+            BridgeDiagnostics.record(appContext, "HUD RFCOMM callback connected")
+            try {
+                readGlasses(reader) { callbackLoopActive(loopJob) && socket === connectedSocket }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (callbackLoopActive(loopJob)) {
+                    Log.d(TAG, "Bluetooth HUD callback disconnected", error)
+                    onLog("Bluetooth HUD disconnected.")
+                }
+            }
+            releaseSocket(connectedSocket)
+            break
         }
     }
 
@@ -287,6 +378,52 @@ class BluetoothBridgeServer(
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun connectToHudCallback(loopJob: Job?): BluetoothSocket? {
+        if (!callbackLoopActive(loopJob)) return null
+        val adapter = bluetoothAdapter() ?: return null
+        if (!hasConnectPermission() || !adapter.isEnabled) return null
+        val trustedAddress = trustedGlassesAddress()
+        if (trustedAddress.isBlank()) return null
+        val device = runCatching { adapter.getRemoteDevice(trustedAddress) }
+            .getOrNull()
+            ?: return null
+        onState(
+            BluetoothServerState(
+                active = true,
+                connected = false,
+                paired = true,
+                pairingMode = false,
+                status = "Calling paired HUD",
+            ),
+        )
+        runCatching { adapter.cancelDiscovery() }
+        var candidate: BluetoothSocket? = null
+        var timeoutJob: Job? = null
+        val attemptActive = java.util.concurrent.atomic.AtomicBoolean(true)
+        return try {
+            candidate = device.createRfcommSocketToServiceRecord(serviceUuid)
+            pendingSocket = candidate
+            timeoutJob = scope.launch {
+                delay(CALLBACK_CONNECT_TIMEOUT_MS)
+                if (attemptActive.get() && pendingSocket === candidate) {
+                    Log.w(TAG, "Bluetooth HUD callback timed out")
+                    runCatching { candidate?.close() }
+                }
+            }
+            candidate.connect()
+            candidate
+        } catch (error: Throwable) {
+            Log.d(TAG, "Bluetooth HUD callback failed", error)
+            runCatching { candidate?.close() }
+            null
+        } finally {
+            attemptActive.set(false)
+            if (pendingSocket === candidate) pendingSocket = null
+            timeoutJob?.cancel()
+        }
+    }
+
     private fun performHandshake(
         acceptedSocket: BluetoothSocket,
         reader: BufferedReader,
@@ -331,10 +468,10 @@ class BluetoothBridgeServer(
 
     private fun readGlasses(
         reader: BufferedReader,
-        loopJob: Job?,
+        active: () -> Boolean,
     ) {
         reader.use {
-            while (serverLoopActive(loopJob)) {
+            while (active()) {
                 val raw = it.readLine() ?: break
                 if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) {
                     onError("Bluetooth message was too large.", null)
@@ -408,6 +545,34 @@ class BluetoothBridgeServer(
     private fun serverLoopActive(loopJob: Job?): Boolean =
         connectJob === loopJob && loopJob?.isActive == true
 
+    private fun callbackLoopActive(loopJob: Job?): Boolean =
+        callbackJob === loopJob && loopJob?.isActive == true
+
+    private fun claimSocket(candidate: BluetoothSocket): Boolean =
+        synchronized(connectionLock) {
+            if (socket != null) {
+                false
+            } else {
+                socket = candidate
+                true
+            }
+        }
+
+    private fun releaseSocket(target: BluetoothSocket) {
+        synchronized(connectionLock) {
+            if (socket !== target) {
+                runCatching { target.close() }
+                return
+            }
+            synchronized(writeLock) {
+                runCatching { writer?.close() }
+                writer = null
+            }
+            runCatching { target.close() }
+            socket = null
+        }
+    }
+
     private fun closeServer(target: BluetoothServerSocket? = null) {
         val activeServer = serverSocket
         if (target != null && activeServer !== target) {
@@ -421,12 +586,21 @@ class BluetoothBridgeServer(
     }
 
     private fun closeSocket() {
-        synchronized(writeLock) {
-            runCatching { writer?.close() }
-            writer = null
+        synchronized(connectionLock) {
+            synchronized(writeLock) {
+                runCatching { writer?.close() }
+                writer = null
+            }
+            closePendingSocket()
+            runCatching { socket?.close() }
+            socket = null
         }
-        runCatching { socket?.close() }
-        socket = null
+    }
+
+    private fun closePendingSocket() {
+        val pending = pendingSocket
+        pendingSocket = null
+        runCatching { pending?.close() }
     }
 
     private fun writeLine(activeWriter: BufferedWriter, raw: String) {
@@ -443,6 +617,9 @@ class BluetoothBridgeServer(
         private const val KEY_TRUSTED_GLASSES_ADDRESS = "trusted_glasses_address"
         private const val KEY_LAST_GLASSES_ADDRESS = "last_glasses_address"
         private const val SERVER_RETRY_DELAY_MS = 30_000L
+        private const val CALLBACK_RETRY_DELAY_MS = 5_000L
+        private const val CALLBACK_CONNECT_TIMEOUT_MS = 12_000L
+        private const val CALLBACK_CONNECT_ATTEMPTS = 8
         private const val HANDSHAKE_TIMEOUT_MS = 8_000L
     }
 }
