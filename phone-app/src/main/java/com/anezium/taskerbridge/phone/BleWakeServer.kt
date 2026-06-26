@@ -67,6 +67,9 @@ object BleWakeServer {
     @Volatile
     private var lastHudBeaconWakeAtMs: Long = 0L
 
+    @Volatile
+    private var lastWakeRebuildAtMs: Long = 0L
+
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             advertising = true
@@ -148,6 +151,20 @@ object BleWakeServer {
         return health(context)
     }
 
+    fun ensureFresh(context: Context, maxAgeMs: Long): BleWakeState {
+        val cleanContext = context.applicationContext
+        if (!isArmed(cleanContext)) {
+            stop()
+            return BleWakeState(active = false, status = "BLE wake disabled")
+        }
+        val state = health(cleanContext)
+        val now = SystemClock.elapsedRealtime()
+        if (!state.active || lastWakeRebuildAtMs == 0L || now - lastWakeRebuildAtMs >= maxAgeMs) {
+            return restart(cleanContext)
+        }
+        return state
+    }
+
     fun restart(context: Context): BleWakeState {
         val cleanContext = context.applicationContext
         appContext = cleanContext
@@ -156,7 +173,9 @@ object BleWakeServer {
             return BleWakeState(active = false, status = "BLE wake disabled")
         }
         stop()
-        return ensureStarted(cleanContext)
+        val state = ensureStarted(cleanContext)
+        lastWakeRebuildAtMs = SystemClock.elapsedRealtime()
+        return state
     }
 
     fun health(context: Context): BleWakeState {

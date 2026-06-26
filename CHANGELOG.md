@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.9-preview.18 - 2026-06-26
+
+### Preview Fix
+
+- Make the foreground wake watchdog forcibly rebuild the phone BLE wake primitives about every ten minutes while idle, so long-idle recovery does not depend only on Android alarm delivery.
+- Reuse the stronger rebuild path from preview.17 for both stale-health and scheduled maintenance cases.
+- Keep the helper unchanged and keep all extra maintenance phone-side only.
+
+### Upgrade Notes
+
+- Install the new phone APK, then tap **Arm wake bridge** once.
+- Bundled HUD helper remains `0.2.6-preview.10`; reinstall HUD only if it is older.
+
 ## v0.2.9-preview.17 - 2026-06-26
 
 ### Preview Fix

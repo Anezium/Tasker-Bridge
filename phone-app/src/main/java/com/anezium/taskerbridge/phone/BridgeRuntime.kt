@@ -247,7 +247,7 @@ class BridgeRuntime private constructor(context: Context) {
         if (companionLinked) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
-        val wake = BleWakeServer.ensureHealthy(appContext)
+        val wake = BleWakeServer.ensureFresh(appContext, WAKE_FORCE_REARM_INTERVAL_MS)
         BridgeWakeScheduler.schedule(appContext)
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
@@ -611,6 +611,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val TASK_REQUEST_DEBOUNCE_MS = 800L
         private const val CXR_RELEASE_DELAY_MS = 1_500L
         private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
+        private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
 
         @Volatile
         private var instance: BridgeRuntime? = null
