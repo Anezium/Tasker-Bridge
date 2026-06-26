@@ -156,6 +156,7 @@ private fun PhoneScreen(
                         StatusRow("Authorization", if (state.authorized) "saved" else "needed", state.authorized)
                         StatusRow("Setup link", state.setupLinkLabel(), state.cxrConnected || state.glassBtConnected)
                         StatusRow("Bundled version", state.helperBundledVersion, state.helperBundledVersion != "unknown")
+                        StatusRow("Installed version", state.helperLastInstalledVersion, state.helperLastInstalledVersion != "none recorded")
                         SmallText(state.helperInstallStatus)
                         BridgeButton(
                             "Install HUD",
@@ -349,7 +350,7 @@ private fun PhoneUiState.bridgeSummary(): String = when {
     bluetoothConnected && taskerReady() -> "HUD connected over Bluetooth, ${tasks.size} Tasker tasks available."
     bridgeServiceActive -> "HUD Bluetooth session is active."
     !companionLinked -> "Link the glasses with Android Companion Device for reliable wake."
-    bluetoothServerActive -> "BLE wake is armed; the HUD can wake a short Bluetooth session."
+    bluetoothServerActive -> "Wake bridge is armed; the HUD can connect over Bluetooth."
     !bridgeServiceActive -> "Arm the wake bridge to accept glasses commands."
     else -> lastStatus
 }

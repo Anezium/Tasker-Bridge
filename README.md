@@ -64,7 +64,7 @@ Tasker Bridge currently targets Android 31+ on the phone.
 1. Install the phone APK from the latest release.
 2. Open Tasker Bridge on the phone.
 3. Accept the Android permissions.
-4. Tap **Install HUD** when the helper needs to be installed or updated.
+4. Tap **Install HUD** when the helper needs to be installed or updated; the phone UI shows both bundled and last installed helper versions.
 5. Tap **Launch HUD** to open it on the glasses.
 6. Tap **Link glasses for wake** / **Arm wake bridge** and accept Android's companion-device prompt.
 7. Tap **Launch HUD** after the wake bridge is linked and armed.
@@ -108,7 +108,7 @@ Phone app
   -> returns LAUNCH_RESULT
 ```
 
-The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone accepts only the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first compatible phone endpoint after install. The BLE wake characteristic is only a doorbell; task names and launch commands still travel over the paired RFCOMM session. Android Companion Device Manager is used separately so the phone app can be bound by the system while the linked glasses are nearby.
+The first successful RFCOMM connection to the Tasker Bridge service UUID is remembered as the paired HUD. Device names such as "Rokid" or "Glasses" are never used for routing, because users can rename their glasses freely. After pairing, the phone accepts only the saved Bluetooth address; use **Forget Bluetooth pairing** to learn a different HUD. The glasses helper also remembers the first compatible phone endpoint after install; after repeated failures it searches other paired phones and replaces the remembered endpoint only after a valid Tasker Bridge handshake. The BLE wake characteristic is only a doorbell; task names and launch commands still travel over the paired RFCOMM session. Android Companion Device Manager is used separately so the phone app can be bound by the system while the linked glasses are nearby.
 
 Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOMM service UUID:
 

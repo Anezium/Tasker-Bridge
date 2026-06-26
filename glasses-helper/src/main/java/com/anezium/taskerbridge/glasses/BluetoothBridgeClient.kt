@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.anezium.taskerbridge.shared.ControlMessage
@@ -61,6 +62,15 @@ class BluetoothBridgeClient(
     @Volatile
     private var writer: BufferedWriter? = null
 
+    @Volatile
+    private var trustedConnectFailures: Int = 0
+
+    @Volatile
+    private var lastConnectAttemptUsedFallback: Boolean = false
+
+    @Volatile
+    private var nextFallbackSearchAtMs: Long = 0L
+
     fun start() {
         if (acceptJob?.isActive == true) return
         acceptJob = scope.launch { connectLoop() }
@@ -92,6 +102,7 @@ class BluetoothBridgeClient(
         while (acceptJob?.isActive == true) {
             val connectedSocket = connectToPhone()
             if (connectedSocket == null) {
+                recordConnectFailure()
                 delay(RECONNECT_DELAY_MS)
                 continue
             }
@@ -104,9 +115,13 @@ class BluetoothBridgeClient(
             if (!performHandshake(activeWriter, reader)) {
                 closeSocket()
                 onLog("Rejected incompatible Bluetooth phone.")
+                recordConnectFailure()
                 delay(RECONNECT_DELAY_MS)
                 continue
             }
+            trustedConnectFailures = 0
+            lastConnectAttemptUsedFallback = false
+            nextFallbackSearchAtMs = 0L
             rememberTrustedPhone(peerAddress)
             onState(
                 BluetoothClientState(
@@ -152,7 +167,10 @@ class BluetoothBridgeClient(
             return null
         }
 
-        val candidates = candidateDevices(adapter)
+        val trustedAddress = trustedPhoneAddress()
+        val includeFallback = shouldSearchFallbackPhones(trustedAddress)
+        lastConnectAttemptUsedFallback = includeFallback
+        val candidates = candidateDevices(adapter, trustedAddress, includeFallback)
         if (candidates.isEmpty()) {
             onState(BluetoothClientState(active = true, connected = false, status = "Pair phone first"))
             return null
@@ -164,7 +182,11 @@ class BluetoothBridgeClient(
                 BluetoothClientState(
                     active = true,
                     connected = false,
-                    status = if (trustedPhoneAddress().isBlank()) "Pairing phone" else "Connecting phone",
+                    status = when {
+                        trustedAddress.isBlank() -> "Pairing phone"
+                        includeFallback -> "Searching paired phones"
+                        else -> "Connecting phone"
+                    },
                 ),
             )
             val connected = runCatching {
@@ -228,13 +250,21 @@ class BluetoothBridgeClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun candidateDevices(adapter: BluetoothAdapter): List<BluetoothDevice> {
-        val trustedAddress = trustedPhoneAddress()
+    private fun candidateDevices(
+        adapter: BluetoothAdapter,
+        trustedAddress: String,
+        includeFallback: Boolean,
+    ): List<BluetoothDevice> {
         val bondedDevices = adapter.bondedDevices.orEmpty()
-        if (trustedAddress.isNotBlank()) {
-            return bondedDevices.filter { it.safeAddress().equals(trustedAddress, ignoreCase = true) }
+            .sortedBy { it.safeAddress() }
+        if (trustedAddress.isBlank()) {
+            return bondedDevices
         }
-        return bondedDevices.sortedBy { it.safeAddress() }
+        val trustedDevices = bondedDevices.filter { it.safeAddress().equals(trustedAddress, ignoreCase = true) }
+        if (includeFallback) {
+            return trustedDevices + bondedDevices.filterNot { it.safeAddress().equals(trustedAddress, ignoreCase = true) }
+        }
+        return trustedDevices
     }
 
     private fun bluetoothAdapter(): BluetoothAdapter? {
@@ -253,9 +283,24 @@ class BluetoothBridgeClient(
         prefs.getString(KEY_TRUSTED_PHONE_ADDRESS, "").orEmpty()
 
     private fun rememberTrustedPhone(address: String) {
-        if (address.isBlank() || trustedPhoneAddress().isNotBlank()) return
+        if (address.isBlank() || address.equals(trustedPhoneAddress(), ignoreCase = true)) return
         prefs.edit().putString(KEY_TRUSTED_PHONE_ADDRESS, address).apply()
     }
+
+    private fun recordConnectFailure() {
+        if (trustedPhoneAddress().isNotBlank()) {
+            trustedConnectFailures = (trustedConnectFailures + 1).coerceAtMost(TRUSTED_FALLBACK_AFTER_FAILURES)
+            if (lastConnectAttemptUsedFallback) {
+                nextFallbackSearchAtMs = SystemClock.elapsedRealtime() + FALLBACK_SEARCH_COOLDOWN_MS
+            }
+        }
+        lastConnectAttemptUsedFallback = false
+    }
+
+    private fun shouldSearchFallbackPhones(trustedAddress: String): Boolean =
+        trustedAddress.isNotBlank() &&
+            trustedConnectFailures >= TRUSTED_FALLBACK_AFTER_FAILURES &&
+            SystemClock.elapsedRealtime() >= nextFallbackSearchAtMs
 
     @SuppressLint("MissingPermission")
     private fun android.bluetooth.BluetoothDevice?.safeName(): String =
@@ -287,5 +332,7 @@ class BluetoothBridgeClient(
         private const val PREFS_NAME = "tasker_bridge_bluetooth"
         private const val KEY_TRUSTED_PHONE_ADDRESS = "trusted_phone_address"
         private const val RECONNECT_DELAY_MS = 5_000L
+        private const val TRUSTED_FALLBACK_AFTER_FAILURES = 3
+        private const val FALLBACK_SEARCH_COOLDOWN_MS = 30_000L
     }
 }

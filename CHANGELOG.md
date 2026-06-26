@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.7 - 2026-06-26
+
+### Preview Fix
+
+- Keep Tasker Bridge on the no-CXR-L runtime path: CXR-L remains only for helper install/update and phone-triggered HUD opening.
+- Update the glasses helper to recover from a stale remembered phone Bluetooth address after repeated connection failures, with throttled fallback searches, then remember the new phone only after a valid Tasker Bridge handshake.
+- Show both bundled and last installed helper versions in the phone UI so testers can confirm the glasses helper was actually updated.
+- Refresh the phone bridge summary copy to describe the passive Bluetooth listener that stays ready while the wake bridge is armed.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.3` reaches the glasses, then tap **Arm wake bridge**.
+- Keep the Tasker Bridge notification running during long-idle testing.
+- For this test, open the HUD from the glasses after a few hours; the runtime task list should load over Bluetooth without CXR-L.
+
 ## v0.2.9-preview.6 - 2026-06-26
 
 ### Preview Fix
