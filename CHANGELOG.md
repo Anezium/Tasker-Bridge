@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.10 - 2026-06-26
+
+### Preview Fix
+
+- Add a reversed BLE wake path for long-idle launches: the phone now arms an Android `PendingIntent` BLE scan while the wake bridge is armed, and the glasses HUD emits a short wake beacon when it opens or retries.
+- Keep the existing phone-advertises/glasses-scan wake path as a fast path, but no longer depend on the phone process already being alive after several hours.
+- Start the phone foreground Bluetooth session from the HUD beacon receiver, then re-arm wake health before the glasses RFCOMM reconnects.
+- Stop the glasses HUD beacon as soon as the HUD closes, so the new wake path does not add background battery drain on the glasses.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.6` reaches the glasses, then tap **Arm wake bridge**.
+- The normal runtime still does not keep CXR-L connected. CXR-L remains setup-only; task loading/launching uses BLE wake plus Bluetooth RFCOMM.
+- This preview specifically targets the "works first, then after a few hours the HUD cannot load tasks" report.
+
 ## v0.2.9-preview.9 - 2026-06-26
 
 ### Preview Fix

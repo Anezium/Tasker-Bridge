@@ -59,6 +59,7 @@ class HelperRuntime private constructor(context: Context) {
         wakeRequestInFlight = false
         lastTaskRequestAtMs = 0L
         lastWakeRequestAtMs = 0L
+        BleWakeAdvertiser.cancel()
         BleWakeClient.cancel()
         bridge.stop()
         if (!wasStarted) return
@@ -312,6 +313,7 @@ class HelperRuntime private constructor(context: Context) {
     }
 
     private fun requestPhoneWake(reason: String) {
+        BleWakeAdvertiser.pulse(appContext)
         val now = SystemClock.elapsedRealtime()
         if (wakeRequestInFlight || now - lastWakeRequestAtMs < WAKE_REQUEST_MIN_INTERVAL_MS) {
             requestTasks(reason)

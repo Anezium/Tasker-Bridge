@@ -15,6 +15,7 @@ object Protocol {
     const val BLUETOOTH_SERVICE_UUID = "3d31b090-bb2f-4876-b55f-0f88a6c42c2e"
     const val BLE_WAKE_SERVICE_UUID = "9a7f64ad-37f8-4b5d-bcf5-9ad7876d2d71"
     const val BLE_WAKE_CHARACTERISTIC_UUID = "9a7f64ae-37f8-4b5d-bcf5-9ad7876d2d71"
+    const val BLE_HUD_BEACON_SERVICE_UUID = "9a7f64af-37f8-4b5d-bcf5-9ad7876d2d71"
     const val BLE_WAKE_TYPE_TASKS = "wake_tasks"
     const val MAX_WIRE_MESSAGE_CHARS = 64_000
     const val MAX_TASKS_ON_HUD = 6

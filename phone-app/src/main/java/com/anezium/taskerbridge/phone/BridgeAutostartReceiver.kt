@@ -10,6 +10,12 @@ import android.util.Log
 class BridgeAutostartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
+        if (BleWakeServer.isWakeScanIntent(intent)) {
+            if (BleWakeServer.handleWakeScanIntent(context, intent)) {
+                Log.i(TAG, "HUD beacon wake accepted")
+            }
+            return
+        }
         when (action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
