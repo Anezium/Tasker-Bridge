@@ -148,6 +148,17 @@ object BleWakeServer {
         return health(context)
     }
 
+    fun restart(context: Context): BleWakeState {
+        val cleanContext = context.applicationContext
+        appContext = cleanContext
+        if (!isArmed(cleanContext)) {
+            stop()
+            return BleWakeState(active = false, status = "BLE wake disabled")
+        }
+        stop()
+        return ensureStarted(cleanContext)
+    }
+
     fun health(context: Context): BleWakeState {
         val cleanContext = context.applicationContext
         appContext = cleanContext

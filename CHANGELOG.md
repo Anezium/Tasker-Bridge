@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.9-preview.17 - 2026-06-26
+
+### Preview Fix
+
+- Make the scheduled phone wake rearm forcibly rebuild the BLE GATT advertiser and HUD-beacon scan instead of trusting stale in-memory `active` flags.
+- Keep boot, Bluetooth-on, and companion rearm paths lightweight, while scheduled long-idle maintenance now closes and recreates the phone BLE wake primitives.
+- Preserve the glasses battery model: no helper changes and no additional glasses background work.
+
+### Upgrade Notes
+
+- Install the new phone APK, then tap **Arm wake bridge** once so the phone schedules the stronger long-idle rearm.
+- Bundled HUD helper remains `0.2.6-preview.10`; reinstall HUD only if it is older.
+
 ## v0.2.9-preview.16 - 2026-06-26
 
 ### Preview Fix
