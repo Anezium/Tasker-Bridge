@@ -33,6 +33,7 @@ class BridgeRuntime private constructor(context: Context) {
     private var lastBluetoothConnectedAtMs = 0L
     private var lastTaskListSentAtMs = 0L
     private var lastTaskerSnapshot: TaskerSnapshot? = null
+    private val recentLaunchResults = LinkedHashMap<String, ControlMessage.LaunchResult>()
     private val cxrSetup = CxrSetupCoordinator(CONNECT_COOLDOWN_MS)
 
     private val bluetooth = BluetoothBridgeServer(
@@ -416,8 +417,13 @@ class BridgeRuntime private constructor(context: Context) {
         }
     }
 
-    fun runTaskFromPhone(taskName: String) {
+    fun runTaskFromPhone(taskName: String, requestId: String = "") {
         scope.launch {
+            val cachedResult = if (requestId.isNotBlank()) recentLaunchResults[requestId] else null
+            if (cachedResult != null) {
+                sendLaunchResultToGlasses(cachedResult)
+                return@launch
+            }
             val result = tasker.runTask(taskName)
             _state.value = _state.value.copy(
                 lastStatus = result.message,
@@ -427,11 +433,10 @@ class BridgeRuntime private constructor(context: Context) {
                 taskName = result.taskName,
                 success = result.success,
                 message = result.message,
+                requestId = requestId,
             )
-            val delivered = bluetooth.send(resultMessage) || cxr.sendControl(resultMessage)
-            if (!delivered) {
-                _state.value = _state.value.copy(lastStatus = "Waiting for HUD connection.")
-            }
+            rememberLaunchResult(resultMessage)
+            sendLaunchResultToGlasses(resultMessage)
             refreshTasker(sendToGlasses = false)
         }
     }
@@ -535,7 +540,7 @@ class BridgeRuntime private constructor(context: Context) {
             }
             StatusType.LAUNCH_TASK -> {
                 _state.value = _state.value.copy(lastStatus = "HUD requested: ${message.taskName}")
-                runTaskFromPhone(message.taskName)
+                runTaskFromPhone(message.taskName, message.requestId)
             }
             StatusType.SELECTION_CHANGED -> {
                 val safeIndex = message.selectedIndex.coerceInTaskBounds(_state.value.tasks)
@@ -578,6 +583,23 @@ class BridgeRuntime private constructor(context: Context) {
         } else {
             BridgeDiagnostics.record(appContext, "Task list sent to HUD: ${snapshot.tasks.size}")
             _state.value = _state.value.copy(wakeDiagnostics = wakeDiagnosticsSummary())
+        }
+    }
+
+    private suspend fun sendLaunchResultToGlasses(message: ControlMessage.LaunchResult) {
+        val delivered = bluetooth.send(message) || cxr.sendControl(message)
+        if (!delivered) {
+            _state.value = _state.value.copy(lastStatus = "Waiting for HUD connection.")
+        }
+    }
+
+    private fun rememberLaunchResult(message: ControlMessage.LaunchResult) {
+        val requestId = message.requestId
+        if (requestId.isBlank()) return
+        recentLaunchResults[requestId] = message
+        while (recentLaunchResults.size > MAX_RECENT_LAUNCH_RESULTS) {
+            val firstKey = recentLaunchResults.keys.firstOrNull() ?: break
+            recentLaunchResults.remove(firstKey)
         }
     }
 
@@ -638,6 +660,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
         private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
         private const val RFCOMM_FORCE_REARM_INTERVAL_MS = 5 * 60 * 1000L
+        private const val MAX_RECENT_LAUNCH_RESULTS = 12
 
         @Volatile
         private var instance: BridgeRuntime? = null

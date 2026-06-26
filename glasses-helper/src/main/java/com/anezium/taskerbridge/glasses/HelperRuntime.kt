@@ -19,10 +19,10 @@ import kotlin.math.max
 import kotlin.math.min
 
 private data class PendingLaunchRequest(
-    val id: Long,
+    val id: String,
     val taskName: String,
     val selectedIndex: Int,
-    val onLaunchRequestSent: () -> Unit,
+    val onLaunchSucceeded: () -> Unit,
 )
 
 class HelperRuntime private constructor(context: Context) {
@@ -224,10 +224,10 @@ class HelperRuntime private constructor(context: Context) {
         onLaunchRequestSent: () -> Unit,
     ) {
         val request = PendingLaunchRequest(
-            id = ++nextLaunchRequestId,
+            id = "launch-${SystemClock.elapsedRealtime()}-${++nextLaunchRequestId}",
             taskName = task.name,
             selectedIndex = selectedIndex,
-            onLaunchRequestSent = onLaunchRequestSent,
+            onLaunchSucceeded = onLaunchRequestSent,
         )
         pendingLaunch = request
         attemptLaunchRequest(request, wakeOnFailure = true)
@@ -243,6 +243,7 @@ class HelperRuntime private constructor(context: Context) {
                 type = StatusType.LAUNCH_TASK,
                 taskName = request.taskName,
                 selectedIndex = request.selectedIndex,
+                requestId = request.id,
                 message = "Launch requested",
             ),
             onNotSent = {
@@ -258,8 +259,10 @@ class HelperRuntime private constructor(context: Context) {
             },
             onSent = {
                 if (pendingLaunch?.id == request.id) {
-                    clearPendingLaunch(request.id)
-                    request.onLaunchRequestSent()
+                    _state.value = _state.value.copy(
+                        status = "Launch sent: ${request.taskName}",
+                        lastLaunchSuccess = null,
+                    )
                 }
             },
         )
@@ -295,7 +298,7 @@ class HelperRuntime private constructor(context: Context) {
         attemptLaunchRequest(request, wakeOnFailure = false)
     }
 
-    private fun clearPendingLaunch(id: Long) {
+    private fun clearPendingLaunch(id: String) {
         if (pendingLaunch?.id != id) return
         pendingLaunch = null
         launchRetryJob?.cancel()
@@ -400,6 +403,12 @@ class HelperRuntime private constructor(context: Context) {
                 )
             }
             is ControlMessage.LaunchResult -> {
+                val launch = pendingLaunch
+                val matchesPendingLaunch = launch != null &&
+                    (
+                        message.requestId.isNotBlank() && message.requestId == launch.id ||
+                            message.requestId.isBlank() && message.taskName == launch.taskName
+                    )
                 _state.value = _state.value.copy(
                     lastLaunchTask = message.taskName,
                     lastLaunchSuccess = message.success,
@@ -407,6 +416,12 @@ class HelperRuntime private constructor(context: Context) {
                         if (message.success) "Launched ${message.taskName}" else "Launch failed"
                     },
                 )
+                if (matchesPendingLaunch) {
+                    clearPendingLaunch(launch.id)
+                    if (message.success) {
+                        launch.onLaunchSucceeded()
+                    }
+                }
             }
             is ControlMessage.SetStatus -> {
                 _state.value = _state.value.copy(status = message.message)
@@ -515,6 +530,10 @@ class HelperRuntime private constructor(context: Context) {
             9_000L,
             15_000L,
             25_000L,
+            40_000L,
+            60_000L,
+            90_000L,
+            120_000L,
         )
         private val REQUEST_RETRY_DELAYS_MS = longArrayOf(
             1_500L,
@@ -524,6 +543,9 @@ class HelperRuntime private constructor(context: Context) {
             20_000L,
             30_000L,
             45_000L,
+            60_000L,
+            90_000L,
+            120_000L,
         )
     }
 }

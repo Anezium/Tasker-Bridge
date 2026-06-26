@@ -61,7 +61,7 @@ class BridgeForegroundService : Service() {
                 startWakeWatchdog()
                 BridgeWakeScheduler.schedule(this)
                 scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
-                return START_STICKY
+                return START_REDELIVER_INTENT
             }
 
             ACTION_ARM_WAKE, null -> {
@@ -85,11 +85,23 @@ class BridgeForegroundService : Service() {
         if (!explicitStop && !BleWakeServer.isArmed(this)) {
             runtime.stopBluetoothSession()
         } else if (!explicitStop && BleWakeServer.isArmed(this)) {
+            BridgeDiagnostics.record(this, "Foreground service destroyed; wake rearm scheduled")
             BridgeWakeScheduler.schedule(this)
         }
         runtime.markServiceActive(false)
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (!explicitStop && BleWakeServer.isArmed(this)) {
+            BridgeDiagnostics.record(this, "Phone task removed; wake bridge rearmed")
+            runtime.refreshWakeHealth("task removed")
+            startBridgeForeground(runtime.state.value)
+            startWakeWatchdog()
+            BridgeWakeScheduler.schedule(this)
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

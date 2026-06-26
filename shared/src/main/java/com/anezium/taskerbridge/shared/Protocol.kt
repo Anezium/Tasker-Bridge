@@ -73,6 +73,7 @@ sealed interface ControlMessage {
         val taskName: String,
         val success: Boolean,
         val message: String = "",
+        val requestId: String = "",
         val timestampMs: Long = System.currentTimeMillis(),
     ) : ControlMessage {
         override val type = ControlType.LAUNCH_RESULT
@@ -103,6 +104,7 @@ data class StatusMessage(
     val message: String = "",
     val taskName: String = "",
     val selectedIndex: Int = -1,
+    val requestId: String = "",
     val protocolVersion: Int = Protocol.PROTOCOL_VERSION,
     val peerRole: String = Protocol.HELPER_ROLE,
     val timestampMs: Long = System.currentTimeMillis(),
@@ -137,6 +139,7 @@ object JsonProtocol {
                 .put("taskName", message.taskName)
                 .put("success", message.success)
                 .put("message", message.message)
+                .put("requestId", message.requestId)
                 .put("timestampMs", message.timestampMs)
             is ControlMessage.SetStatus -> json
                 .put("message", message.message)
@@ -181,6 +184,7 @@ object JsonProtocol {
                 taskName = json.optString("taskName"),
                 success = json.optBoolean("success"),
                 message = json.optString("message"),
+                requestId = json.optString("requestId"),
                 timestampMs = json.optLong("timestampMs", System.currentTimeMillis()),
             )
             ControlType.SET_STATUS -> ControlMessage.SetStatus(
@@ -198,6 +202,7 @@ object JsonProtocol {
         .put("message", message.message)
         .put("taskName", message.taskName)
         .put("selectedIndex", message.selectedIndex)
+        .put("requestId", message.requestId)
         .put("protocolVersion", message.protocolVersion)
         .put("peerRole", message.peerRole)
         .put("timestampMs", message.timestampMs)
@@ -210,6 +215,7 @@ object JsonProtocol {
             message = json.optString("message"),
             taskName = json.optString("taskName"),
             selectedIndex = json.optInt("selectedIndex", -1),
+            requestId = json.optString("requestId"),
             protocolVersion = json.optInt("protocolVersion", 1),
             peerRole = json.optString("peerRole", Protocol.HELPER_ROLE),
             timestampMs = json.optLong("timestampMs", System.currentTimeMillis()),

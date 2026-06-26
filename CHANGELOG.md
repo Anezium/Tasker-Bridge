@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.23 - 2026-06-26
+
+### Preview Fix
+
+- Make HUD task launches wait for a phone `LaunchResult` acknowledgement instead of closing after a local socket write, so stale Bluetooth writers can no longer hide a failed launch.
+- Add per-launch request IDs and phone-side result caching so retrying the same HUD tap does not run the same Tasker task twice if only the acknowledgement was lost.
+- Redeliver active HUD session start intents if Android kills the foreground service mid-wake, and rearm wake health if the phone task is removed.
+- Extend task-list and launch retries while the HUD is visibly open, giving the phone several minutes to recover from deep idle without adding any glasses background keepalive.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.14` reaches the glasses, then tap **Arm wake bridge**.
+- A successful task tap should now keep the HUD open until the phone confirms the launch. If it cannot confirm, it will keep retrying instead of silently disappearing.
+- If Alan can still reproduce after this build, send the full `Wake debug ...` line and whether the HUD stayed open on `Launch sent...` or stayed on `Waiting for phone link`.
+
 ## v0.2.9-preview.22 - 2026-06-26
 
 ### Preview Fix
