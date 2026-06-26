@@ -30,6 +30,7 @@ class BridgeRuntime private constructor(context: Context) {
     private var companionRequestInFlight = false
     private var lastAuthorizationRequestAtMs = 0L
     private var lastHudTaskRequestAtMs = 0L
+    private var lastBluetoothConnectedAtMs = 0L
     private var lastTaskListSentAtMs = 0L
     private var lastTaskerSnapshot: TaskerSnapshot? = null
     private val cxrSetup = CxrSetupCoordinator(CONNECT_COOLDOWN_MS)
@@ -220,7 +221,10 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.ensureStarted(appContext)
-        if (_state.value.bluetoothConnected) {
+        if (
+            _state.value.bluetoothConnected &&
+            SystemClock.elapsedRealtime() - lastBluetoothConnectedAtMs < FRESH_BLUETOOTH_CONNECTION_MS
+        ) {
             bluetooth.start()
         } else {
             bluetooth.restart()
@@ -473,7 +477,10 @@ class BridgeRuntime private constructor(context: Context) {
             lastStatus = status.ifBlank { _state.value.lastStatus },
         )
         if (state.connected && !wasConnected) {
+            lastBluetoothConnectedAtMs = SystemClock.elapsedRealtime()
             sendCachedTasksThenRefresh()
+        } else if (state.connected) {
+            lastBluetoothConnectedAtMs = SystemClock.elapsedRealtime()
         }
     }
 
@@ -597,6 +604,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val CONNECT_COOLDOWN_MS = 5_000L
         private const val TASK_REQUEST_DEBOUNCE_MS = 800L
         private const val CXR_RELEASE_DELAY_MS = 1_500L
+        private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
 
         @Volatile
         private var instance: BridgeRuntime? = null

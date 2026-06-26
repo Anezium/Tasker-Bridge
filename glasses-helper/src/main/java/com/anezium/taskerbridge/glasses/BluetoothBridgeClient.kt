@@ -18,6 +18,7 @@ import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.anezium.taskerbridge.shared.StatusType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,7 +78,22 @@ class BluetoothBridgeClient(
 
     fun start() {
         if (acceptJob?.isActive == true) return
-        acceptJob = scope.launch { connectLoop() }
+        val newJob = scope.launch(start = CoroutineStart.LAZY) { connectLoop() }
+        acceptJob = newJob
+        newJob.start()
+    }
+
+    fun restart(status: String = "Reconnecting phone") {
+        val oldJob = acceptJob
+        acceptJob = null
+        closeSocket()
+        val newJob = scope.launch(start = CoroutineStart.LAZY) {
+            oldJob?.cancelAndJoin()
+            onState(BluetoothClientState(active = true, connected = false, status = status))
+            connectLoop()
+        }
+        acceptJob = newJob
+        newJob.start()
     }
 
     fun stop() {
@@ -125,7 +141,7 @@ class BluetoothBridgeClient(
             writer = activeWriter
             val peerName = connectedSocket.remoteDevice.safeName()
             val peerAddress = connectedSocket.remoteDevice.safeAddress()
-            if (!performHandshake(activeWriter, reader)) {
+            if (!performHandshake(connectedSocket, activeWriter, reader)) {
                 closeSocket()
                 onLog("Rejected incompatible Bluetooth phone.")
                 recordConnectFailure()
@@ -205,10 +221,19 @@ class BluetoothBridgeClient(
                 ),
             )
             var candidate: BluetoothSocket? = null
+            var timeoutJob: Job? = null
+            val attemptActive = java.util.concurrent.atomic.AtomicBoolean(true)
             val connected = try {
                 if (!connectLoopActive(loopJob)) return null
                 candidate = device.createRfcommSocketToServiceRecord(serviceUuid)
                 pendingSocket = candidate
+                timeoutJob = scope.launch {
+                    delay(CONNECT_ATTEMPT_TIMEOUT_MS)
+                    if (attemptActive.get() && pendingSocket === candidate) {
+                        Log.w(TAG, "Bluetooth phone connect timed out")
+                        runCatching { candidate?.close() }
+                    }
+                }
                 candidate.connect()
                 candidate
             } catch (error: Throwable) {
@@ -216,7 +241,9 @@ class BluetoothBridgeClient(
                 runCatching { candidate?.close() }
                 null
             } finally {
+                attemptActive.set(false)
                 if (pendingSocket === candidate) pendingSocket = null
+                timeoutJob?.cancel()
             }
             if (connected != null) return connected
         }
@@ -224,10 +251,19 @@ class BluetoothBridgeClient(
     }
 
     private fun performHandshake(
+        connectedSocket: BluetoothSocket,
         activeWriter: BufferedWriter,
         reader: BufferedReader,
     ): Boolean {
-        return runCatching {
+        val handshakeActive = java.util.concurrent.atomic.AtomicBoolean(true)
+        val timeoutJob = scope.launch {
+            delay(HANDSHAKE_TIMEOUT_MS)
+            if (handshakeActive.get() && socket === connectedSocket) {
+                Log.w(TAG, "Bluetooth phone handshake timed out")
+                runCatching { connectedSocket.close() }
+            }
+        }
+        val result = runCatching {
             writeLine(
                 activeWriter,
                 JsonProtocol.encodeStatus(
@@ -238,8 +274,8 @@ class BluetoothBridgeClient(
                     ),
                 ),
             )
-            val raw = reader.readLine() ?: return false
-            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
+            val raw = reader.readLine() ?: return@runCatching false
+            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return@runCatching false
             val hello = JsonProtocol.decodeControl(raw)
             hello is ControlMessage.Hello
                 && hello.protocolVersion == Protocol.PROTOCOL_VERSION
@@ -248,6 +284,9 @@ class BluetoothBridgeClient(
             Log.d(TAG, "Bluetooth handshake failed", error)
             false
         }
+        handshakeActive.set(false)
+        timeoutJob.cancel()
+        return result
     }
 
     private fun readPhone(
@@ -362,6 +401,8 @@ class BluetoothBridgeClient(
         private const val PREFS_NAME = "tasker_bridge_bluetooth"
         private const val KEY_TRUSTED_PHONE_ADDRESS = "trusted_phone_address"
         private const val RECONNECT_DELAY_MS = 5_000L
+        private const val CONNECT_ATTEMPT_TIMEOUT_MS = 12_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 8_000L
         private const val TRUSTED_FALLBACK_AFTER_FAILURES = 3
         private const val FALLBACK_SEARCH_COOLDOWN_MS = 30_000L
     }

@@ -36,6 +36,7 @@ class HelperRuntime private constructor(context: Context) {
     private var lastTaskRequestAtMs = 0L
     private var lastWakeRequestAtMs = 0L
     private var lastTaskListReceivedAtMs = 0L
+    private var lastBridgeRestartAtMs = 0L
 
     private val _state = MutableStateFlow(HelperUiState())
     val state: StateFlow<HelperUiState> = _state.asStateFlow()
@@ -63,6 +64,7 @@ class HelperRuntime private constructor(context: Context) {
         lastTaskRequestAtMs = 0L
         lastWakeRequestAtMs = 0L
         lastTaskListReceivedAtMs = 0L
+        lastBridgeRestartAtMs = 0L
         BleWakeAdvertiser.cancel()
         BleWakeClient.cancel()
         bridge.stop()
@@ -305,15 +307,26 @@ class HelperRuntime private constructor(context: Context) {
     private fun beginTaskRequestRetry() {
         taskRequestRetryJob?.cancel()
         taskRequestRetryJob = scope.launch {
-            REQUEST_RETRY_DELAYS_MS.forEach { delayMs ->
+            REQUEST_RETRY_DELAYS_MS.forEachIndexed { index, delayMs ->
                 delay(delayMs)
                 if (taskListReceived) return@launch
                 if (!_state.value.phoneConnected) {
                     requestPhoneWake("Retry wake")
+                } else if (index >= STALE_CONNECTED_RETRY_INDEX) {
+                    restartBridgeForStaleTaskList()
+                    requestPhoneWake("Stale Bluetooth retry")
                 }
                 sendTaskRequest("Need task list")
             }
         }
+    }
+
+    private fun restartBridgeForStaleTaskList() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBridgeRestartAtMs < BRIDGE_RESTART_MIN_INTERVAL_MS) return
+        lastBridgeRestartAtMs = now
+        _state.value = _state.value.copy(bridgeState = "Reconnecting phone Bluetooth")
+        bridge.restart("Reconnecting phone Bluetooth")
     }
 
     private fun requestPhoneWake(reason: String) {
@@ -378,7 +391,9 @@ class HelperRuntime private constructor(context: Context) {
 
         private const val TASK_REQUEST_MIN_INTERVAL_MS = 1_000L
         private const val WAKE_REQUEST_MIN_INTERVAL_MS = 12_000L
+        private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 12_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
+        private const val STALE_CONNECTED_RETRY_INDEX = 1
         private val REQUEST_RETRY_DELAYS_MS = longArrayOf(
             1_500L,
             3_500L,

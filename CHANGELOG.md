@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.9-preview.15 - 2026-06-26
+
+### Preview Fix
+
+- Recreate the phone RFCOMM listener on every HUD wake, even if the phone still thinks an old HUD socket is connected, so long-idle stale sockets cannot block the new HUD session.
+- Add hard timeouts to the glasses RFCOMM connect and phone/glasses handshake paths, forcing retries instead of letting a dead Bluetooth socket hang the HUD forever.
+- Keep the battery model unchanged: the new retries only run while the HUD is visible and still waiting for the phone.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.10` reaches the glasses, then tap **Arm wake bridge**.
+- This still keeps CXR-L setup-only; runtime task loading uses BLE wake plus RFCOMM, with stale long-idle sockets now force-reset.
+
 ## v0.2.9-preview.14 - 2026-06-26
 
 ### Preview Fix

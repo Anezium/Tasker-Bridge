@@ -17,6 +17,7 @@ import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.anezium.taskerbridge.shared.StatusType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -69,7 +70,9 @@ class BluetoothBridgeServer(
 
     fun start() {
         if (connectJob?.isActive == true) return
-        connectJob = scope.launch { acceptLoop() }
+        val newJob = scope.launch(start = CoroutineStart.LAZY) { acceptLoop() }
+        connectJob = newJob
+        newJob.start()
     }
 
     fun restart() {
@@ -77,8 +80,12 @@ class BluetoothBridgeServer(
         connectJob = null
         closeSocket()
         closeServer()
-        connectJob = scope.launch { acceptLoop() }
-        scope.launch { oldJob?.cancelAndJoin() }
+        val newJob = scope.launch(start = CoroutineStart.LAZY) {
+            oldJob?.cancelAndJoin()
+            acceptLoop()
+        }
+        connectJob = newJob
+        newJob.start()
     }
 
     fun stop() {
@@ -151,7 +158,7 @@ class BluetoothBridgeServer(
             writer = activeWriter
             val peerName = acceptedSocket.remoteDevice.safeName()
             val peerAddress = acceptedSocket.remoteDevice.safeAddress()
-            if (!performHandshake(reader, activeWriter)) {
+            if (!performHandshake(acceptedSocket, reader, activeWriter)) {
                 onLog("Rejected incompatible Bluetooth HUD.")
                 closeSocket()
                 continue
@@ -281,18 +288,27 @@ class BluetoothBridgeServer(
     }
 
     private fun performHandshake(
+        acceptedSocket: BluetoothSocket,
         reader: BufferedReader,
         activeWriter: BufferedWriter,
     ): Boolean {
-        return runCatching {
-            val raw = reader.readLine() ?: return false
-            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return false
+        val handshakeActive = java.util.concurrent.atomic.AtomicBoolean(true)
+        val timeoutJob = scope.launch {
+            delay(HANDSHAKE_TIMEOUT_MS)
+            if (handshakeActive.get() && socket === acceptedSocket) {
+                Log.w(TAG, "Bluetooth HUD handshake timed out")
+                runCatching { acceptedSocket.close() }
+            }
+        }
+        val result = runCatching {
+            val raw = reader.readLine() ?: return@runCatching false
+            if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return@runCatching false
             val hello = JsonProtocol.decodeStatus(raw)
             if (hello.type != StatusType.HELLO
                 || hello.protocolVersion != Protocol.PROTOCOL_VERSION
                 || hello.peerRole != Protocol.HELPER_ROLE
             ) {
-                return false
+                return@runCatching false
             }
             writeLine(
                 activeWriter,
@@ -308,6 +324,9 @@ class BluetoothBridgeServer(
             Log.d(TAG, "Bluetooth handshake failed", error)
             false
         }
+        handshakeActive.set(false)
+        timeoutJob.cancel()
+        return result
     }
 
     private fun readGlasses(
@@ -424,5 +443,6 @@ class BluetoothBridgeServer(
         private const val KEY_TRUSTED_GLASSES_ADDRESS = "trusted_glasses_address"
         private const val KEY_LAST_GLASSES_ADDRESS = "last_glasses_address"
         private const val SERVER_RETRY_DELAY_MS = 30_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 8_000L
     }
 }
