@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.util.Log
 import com.anezium.taskerbridge.shared.ControlMessage
 import com.anezium.taskerbridge.shared.JsonProtocol
@@ -56,10 +57,13 @@ class CxrPhoneController(
     private var installStarted = false
     private var uninstallStarted = false
     private var bundledHelperInfoCache: HelperApkInfo? = null
+    private var connecting = false
+    private var lastConnectAttemptAtMs = 0L
 
     private val linkCallback = object : ICXRLinkCbk {
         override fun onCXRLConnected(connected: Boolean) {
             cxrConnected = connected
+            connecting = false
             onLog("CXR-L service connected: $connected")
             onConnectionChanged(cxrConnected, btConnected)
             maybeUploadPendingHelper()
@@ -219,7 +223,18 @@ class CxrPhoneController(
             onError("Turn on phone Wi-Fi first. Hi Rokid uses it for CXR-L install.", null)
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        if (link != null && (cxrConnected || btConnected)) {
+            onLog("CXR-L already connected for this HUD session.")
+            return
+        }
+        if (link != null && connecting && now - lastConnectAttemptAtMs < CONNECT_ATTEMPT_TIMEOUT_MS) {
+            onLog("CXR-L connection already starting for this HUD session.")
+            return
+        }
         disconnect()
+        lastConnectAttemptAtMs = now
+        connecting = true
         val nextLink = CXRLink(context).apply {
             configCXRSession(
                 CxrDefs.CXRSession(
@@ -238,11 +253,13 @@ class CxrPhoneController(
         if (bound) {
             onLog("Binding to global Hi Rokid service...")
         } else {
+            connecting = false
             onError("CXR-L service bind failed. Open Hi Rokid, then retry.", null)
         }
     }
 
     fun disconnect() {
+        connecting = false
         runCatching { link?.disconnect() }
             .onFailure { Log.w(TAG, "CXR-L disconnect failed", it) }
         link = null
@@ -359,7 +376,6 @@ class CxrPhoneController(
 
     fun sendControl(message: ControlMessage): Boolean {
         val activeLink = link ?: return false
-        if (!cxrConnected || !btConnected) return false
         val raw = JsonProtocol.encodeControl(message)
         return runCatching {
             val result = activeLink.sendCustomCmd(
@@ -539,5 +555,6 @@ class CxrPhoneController(
         private const val MEDIA_SERVICE_ACTION = "com.rokid.sprite.aiapp.externalapp.MEDIA_STREAM_SERVICE"
         private const val AUTH_TOKEN_EXTRA = "auth_token"
         private const val AUTH_PACKAGE_EXTRA = "auth_package"
+        private const val CONNECT_ATTEMPT_TIMEOUT_MS = 45_000L
     }
 }

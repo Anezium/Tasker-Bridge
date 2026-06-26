@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.30 - 2026-06-26
+
+### Preview Fix
+
+- Stop resetting CXR-L on every HUD wake retry. If the runtime fallback is already connected or still connecting, Tasker Bridge now reuses that CXR-L attempt instead of disconnecting it and starting over.
+- Allow best-effort CXR task-list / launch-result sends whenever a CXR-L link object exists, instead of requiring connection callbacks that may be delayed after a long-idle wake.
+- Keep the battery model unchanged: CXR-L is still opened only for the visible HUD session and is released by the existing HUD idle/close path.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Keep helper `0.2.6-preview.16` from preview.29 installed on the glasses; reinstall HUD only if the phone does not show that helper as current/running.
+- Tap **Arm wake bridge** again before the next long-idle test.
+
 ## v0.2.9-preview.29 - 2026-06-26
 
 ### Preview Fix
