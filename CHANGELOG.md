@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.16 - 2026-06-26
+
+### Preview Fix
+
+- Add a phone-side scheduled rearm for the wake bridge so Android can restore the BLE HUD-beacon scan and foreground wake service if they are dropped during long idle.
+- Stop recording normal `HUD beacon scan armed` events as wake diagnostics, preserving the useful failure/wake evidence for testers.
+- Keep glasses battery behavior unchanged: the scheduled repair runs on the phone only and does not add any glasses background work.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled HUD helper remains `0.2.6-preview.10`; tap **Install HUD** only if the glasses are still older than preview.15's helper.
+- Tap **Arm wake bridge** after install so the phone schedules the long-idle rearm.
+
 ## v0.2.9-preview.15 - 2026-06-26
 
 ### Preview Fix

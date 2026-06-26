@@ -299,7 +299,6 @@ object BleWakeServer {
             hudBeaconScanActive = true
             lastHudBeaconScanFailureCode = null
             Log.i(TAG, "BLE HUD beacon scan armed")
-            BridgeDiagnostics.record(context, "HUD beacon scan armed")
         } else {
             hudBeaconScanActive = false
             lastHudBeaconScanFailureCode = result

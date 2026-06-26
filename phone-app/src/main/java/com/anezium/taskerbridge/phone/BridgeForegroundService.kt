@@ -42,6 +42,7 @@ class BridgeForegroundService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 explicitStop = true
+                BridgeWakeScheduler.cancel(this)
                 runtime.stopBackground()
                 runtime.markServiceActive(false)
                 stopForegroundCompat()
@@ -58,6 +59,7 @@ class BridgeForegroundService : Service() {
                 )
                 watchRuntimeState()
                 startWakeWatchdog()
+                BridgeWakeScheduler.schedule(this)
                 scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
                 return START_STICKY
             }
@@ -68,6 +70,7 @@ class BridgeForegroundService : Service() {
                 startBridgeForeground(runtime.state.value)
                 watchRuntimeState()
                 startWakeWatchdog()
+                BridgeWakeScheduler.schedule(this)
                 cancelIdleStop()
                 return START_STICKY
             }
@@ -81,6 +84,8 @@ class BridgeForegroundService : Service() {
         cancelWakeWatchdog()
         if (!explicitStop && !BleWakeServer.isArmed(this)) {
             runtime.stopBluetoothSession()
+        } else if (!explicitStop && BleWakeServer.isArmed(this)) {
+            BridgeWakeScheduler.schedule(this)
         }
         runtime.markServiceActive(false)
         serviceScope.cancel()
@@ -241,6 +246,7 @@ class BridgeForegroundService : Service() {
         }
 
         fun armWake(context: Context): Boolean {
+            BridgeWakeScheduler.schedule(context)
             return runCatching {
                 ContextCompat.startForegroundService(
                     context,
@@ -259,6 +265,7 @@ class BridgeForegroundService : Service() {
         }
 
         fun startSession(context: Context, reason: String = "BLE wake"): Boolean {
+            BridgeWakeScheduler.schedule(context)
             return runCatching {
                 ContextCompat.startForegroundService(
                     context,

@@ -16,6 +16,10 @@ class BridgeAutostartReceiver : BroadcastReceiver() {
             }
             return
         }
+        if (BridgeWakeScheduler.isRearmIntent(intent)) {
+            rearmIfEnabled(context, "scheduled")
+            return
+        }
         when (action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
@@ -36,6 +40,7 @@ class BridgeAutostartReceiver : BroadcastReceiver() {
         CompanionDeviceCoordinator.startObserving(context)
         val state = BleWakeServer.ensureStarted(context)
         BridgeForegroundService.armWake(context)
+        BridgeWakeScheduler.schedule(context)
         Log.i(TAG, "BLE wake rearm after $reason: ${state.status}")
     }
 
