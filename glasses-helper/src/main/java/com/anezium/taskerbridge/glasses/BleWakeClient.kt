@@ -26,7 +26,7 @@ import java.util.UUID
 
 object BleWakeClient {
     private const val TAG = "TaskerBridge-BLE"
-    private const val WAKE_TIMEOUT_MS = 12_000L
+    private const val WAKE_TIMEOUT_MS = 20_000L
 
     private val main = Handler(Looper.getMainLooper())
     private val serviceUuid = UUID.fromString(Protocol.BLE_WAKE_SERVICE_UUID)

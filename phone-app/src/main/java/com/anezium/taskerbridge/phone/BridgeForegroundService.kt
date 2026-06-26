@@ -265,7 +265,7 @@ class BridgeForegroundService : Service() {
         private const val ACTION_ARM_WAKE = "com.anezium.taskerbridge.phone.action.ARM_WAKE_BRIDGE"
         private const val ACTION_STOP = "com.anezium.taskerbridge.phone.action.STOP_BRIDGE"
         private const val EXTRA_START_REASON = "com.anezium.taskerbridge.phone.extra.START_REASON"
-        private const val SESSION_IDLE_TIMEOUT_MS = 90_000L
+        private const val SESSION_IDLE_TIMEOUT_MS = 4 * 60 * 1000L
         private const val WAKE_WATCHDOG_INITIAL_DELAY_MS = 20_000L
         private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =

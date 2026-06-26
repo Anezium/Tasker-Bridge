@@ -23,12 +23,15 @@ object CompanionDeviceCoordinator {
     const val REQUEST_CODE = 4210
 
     private const val TAG = "TaskerBridge-CDM"
+    private const val PREFS_NAME = "tasker_bridge_companion"
+    private const val KEY_ASSOCIATED_ADDRESS = "associated_address"
+    private const val KEY_PENDING_ASSOCIATED_ADDRESS = "pending_associated_address"
     private val glassesNamePattern = Pattern.compile("rokid|glasses", Pattern.CASE_INSENSITIVE)
     private val rokidGlassesServiceUuid = UUID.fromString("3c36c196-e056-4e4f-b88e-2cb249365f00")
 
     fun hasAssociation(context: Context): Boolean {
         val manager = manager(context) ?: return false
-        return runCatching {
+        val hasSystemAssociation = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 manager.myAssociations.isNotEmpty()
             } else {
@@ -39,6 +42,7 @@ object CompanionDeviceCoordinator {
             Log.w(TAG, "read associations failed: ${it.message}")
             false
         }
+        return hasSystemAssociation && associatedAddresses(context).isNotEmpty()
     }
 
     fun requestAssociation(activity: Activity, onFailure: (String) -> Unit) {
@@ -57,8 +61,19 @@ object CompanionDeviceCoordinator {
     }
 
     fun handleAssociationResult(context: Context, resultCode: Int, data: Intent?): String? {
-        if (resultCode != Activity.RESULT_OK) return null
-        val address = extractAddress(data) ?: return null
+        if (resultCode != Activity.RESULT_OK) {
+            clearPendingAddress(context)
+            return null
+        }
+        val address = extractAddress(data)
+            ?: pendingAssociatedAddress(context)
+            ?: likelyBondedAddress(context)
+        if (address == null) {
+            clearPendingAddress(context)
+            return null
+        }
+        rememberAssociatedAddress(context, address)
+        clearPendingAddress(context)
         startObserving(context)
         Log.i(TAG, "associated with glasses endpoint")
         return address
@@ -100,7 +115,14 @@ object CompanionDeviceCoordinator {
         address: String,
         onFailure: (String) -> Unit,
     ) {
-        associate(activity, onFailure) {
+        rememberPendingAddress(activity, address)
+        associate(
+            activity = activity,
+            onFailure = { message ->
+                clearPendingAddress(activity)
+                onFailure(message)
+            },
+        ) {
             setSingleDevice(true)
             addDeviceFilter(
                 BluetoothDeviceFilter.Builder()
@@ -187,7 +209,7 @@ object CompanionDeviceCoordinator {
 
     private fun associatedAddresses(context: Context): List<String> {
         val manager = manager(context) ?: return emptyList()
-        return runCatching {
+        val systemAddresses = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 manager.myAssociations.mapNotNull { it.deviceMacAddress?.toString() }
             } else {
@@ -198,6 +220,13 @@ object CompanionDeviceCoordinator {
             Log.w(TAG, "read associated addresses failed: ${it.message}")
             emptyList()
         }
+        return (
+            systemAddresses +
+                listOfNotNull(storedAssociatedAddress(context)) +
+                bondedDevices(context).filter(::looksLikeGlasses).map { it.address }
+            )
+            .filter { it.isNotBlank() }
+            .distinctBy { it.uppercase() }
     }
 
     private fun bondedDevices(context: Context): List<BluetoothDevice> = runCatching {
@@ -215,6 +244,47 @@ object CompanionDeviceCoordinator {
             glassesNamePattern.matcher(it).find()
         } || device.uuids?.any { it.uuid == rokidGlassesServiceUuid } == true
     }.getOrDefault(false)
+
+    private fun likelyBondedAddress(context: Context): String? =
+        bondedDevices(context)
+            .firstOrNull(::looksLikeGlasses)
+            ?.address
+
+    private fun rememberAssociatedAddress(context: Context, address: String) {
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_ASSOCIATED_ADDRESS, address)
+            .apply()
+    }
+
+    private fun rememberPendingAddress(context: Context, address: String) {
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PENDING_ASSOCIATED_ADDRESS, address)
+            .apply()
+    }
+
+    private fun clearPendingAddress(context: Context) {
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_PENDING_ASSOCIATED_ADDRESS)
+            .apply()
+    }
+
+    private fun storedAssociatedAddress(context: Context): String? =
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_ASSOCIATED_ADDRESS, null)
+            ?.takeIf { it.isNotBlank() }
+
+    private fun pendingAssociatedAddress(context: Context): String? =
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_PENDING_ASSOCIATED_ADDRESS, null)
+            ?.takeIf { it.isNotBlank() }
 
     private fun extractAddress(data: Intent?): String? {
         if (data == null) return null

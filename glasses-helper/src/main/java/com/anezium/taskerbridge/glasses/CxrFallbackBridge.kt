@@ -46,10 +46,7 @@ class CxrFallbackBridge(
     fun stop() {
         main.post {
             generation += 1
-            val activeBridge = bridge
             bridge = null
-            runCatching { activeBridge?.disconnectCXRDevice() }
-                .onFailure { Log.w(TAG, "CXR disconnect failed", it) }
             onState(CxrBridgeState(active = false, connected = false, status = "CXR stopped"))
         }
     }

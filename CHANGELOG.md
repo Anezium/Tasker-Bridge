@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.32 - 2026-06-26
+
+### Preview Fix
+
+- Remove the glasses-side broad `disconnectCXRDevice()` call added in preview.31. Closing the HUD now drops Tasker Bridge's local CXR fallback owner without cutting the system CXR/Bluetooth route that the phone manages.
+- Keep the long-idle battery model conservative: no idle CXR keepalive on the glasses, no background glasses polling, and wake impulses still run only while the HUD is visible or retrying a user action.
+- Extend the phone HUD session window after a wake to four minutes and the glasses BLE wake write window to 20 seconds, giving Android more time to bring the phone service, RFCOMM, and CXR fallback back after deep idle.
+- Persist the companion device address selected during Android Companion Device linking and fall back to likely bonded glasses when Android reports an association without a usable address, so `startObservingDevicePresence()` is less likely to be a false "linked" state.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper is now `0.2.6-preview.18`; tap **Install HUD** / reinstall on the glasses after installing the phone APK.
+- Tap **Arm wake bridge** once after install. If the phone still says companion link is needed, use **Link glasses for wake** before arming.
+
 ## v0.2.9-preview.31 - 2026-06-26
 
 ### Preview Fix

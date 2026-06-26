@@ -38,8 +38,8 @@ android {
         applicationId = "com.anezium.taskerbridge.glasses"
         minSdk = 31
         targetSdk = 28
-        versionCode = 32
-        versionName = "0.2.6-preview.17"
+        versionCode = 33
+        versionName = "0.2.6-preview.18"
     }
 
     compileOptions {
