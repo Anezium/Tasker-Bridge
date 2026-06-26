@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.35 - 2026-06-26
+
+### Preview Fix
+
+- Add a delayed runtime fallback after a posted foreground HUD session start. If Android accepts `startForegroundService()` but the service/session is not actually active shortly after the wake, the phone runtime opens the HUD Bluetooth/CXR session itself.
+- Keep preview.34's short phone-side wake hold while avoiding any new glasses idle work.
+- Preserve the glasses battery model: no helper change, no idle CXR keepalive, and no background beacon outside the visible HUD.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper remains `0.2.6-preview.19`; reinstall HUD only if the glasses are not already running that helper.
+- Tap **Arm wake bridge** once after install, then run the same several-hours idle test from the glasses.
+
 ## v0.2.9-preview.34 - 2026-06-26
 
 ### Preview Fix

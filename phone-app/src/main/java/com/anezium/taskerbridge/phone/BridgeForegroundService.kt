@@ -270,6 +270,7 @@ class BridgeForegroundService : Service() {
         private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        private const val RUNTIME_FALLBACK_START_GRACE_MS = 1_500L
         private const val RUNTIME_FALLBACK_MAX_CONNECTED_CHECKS = 6
 
         @Volatile
@@ -334,6 +335,7 @@ class BridgeForegroundService : Service() {
                         .putExtra(EXTRA_START_REASON, reason),
                 )
                 BridgeDiagnostics.record(context, "Foreground session start posted: $reason")
+                scheduleRuntimeSessionFallbackIfNeeded(context, reason)
                 true
             }.getOrElse { error ->
                 postRuntimeSessionFallback(context, reason)
@@ -343,6 +345,22 @@ class BridgeForegroundService : Service() {
                 )
                 true
             }
+        }
+
+        private fun scheduleRuntimeSessionFallbackIfNeeded(context: Context, reason: String) {
+            val appContext = context.applicationContext
+            fallbackHandler.postDelayed(
+                {
+                    val runtime = BridgeRuntime.get(appContext)
+                    val state = runtime.state.value
+                    if (activeService != null && (state.bridgeServiceActive || state.bluetoothConnected)) {
+                        return@postDelayed
+                    }
+                    BridgeDiagnostics.record(appContext, "Foreground session grace expired; runtime fallback starting")
+                    postRuntimeSessionFallback(appContext, "$reason (delayed runtime fallback)")
+                },
+                RUNTIME_FALLBACK_START_GRACE_MS,
+            )
         }
 
         fun stop(context: Context) {
