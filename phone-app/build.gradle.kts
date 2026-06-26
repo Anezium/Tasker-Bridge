@@ -38,8 +38,8 @@ android {
         applicationId = "com.anezium.taskerbridge.phone"
         minSdk = 31
         targetSdk = 36
-        versionCode = 48
-        versionName = "0.2.9-preview.30"
+        versionCode = 49
+        versionName = "0.2.9-preview.31"
     }
 
     compileOptions {
@@ -109,6 +109,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.rokid.client.l)
+    implementation("com.example.cxrglobal:lib:0.2.0")
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

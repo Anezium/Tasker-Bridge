@@ -32,3 +32,9 @@ rootProject.name = "TaskerBridge"
 include(":shared")
 include(":phone-app")
 include(":glasses-helper")
+
+includeBuild("../CxrGlobal") {
+    dependencySubstitution {
+        substitute(module("com.example.cxrglobal:lib")).using(project(":lib"))
+    }
+}

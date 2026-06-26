@@ -4,26 +4,25 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
 import android.util.Log
+import com.example.cxrglobal.CXRLink
+import com.example.cxrglobal.CxrDefs
+import com.example.cxrglobal.GlassInfo
+import com.example.cxrglobal.auth.AuthResult
+import com.example.cxrglobal.auth.AuthorizationHelper
+import com.example.cxrglobal.callbacks.ICXRLinkCbk
+import com.example.cxrglobal.callbacks.ICustomCmdCbk
+import com.example.cxrglobal.callbacks.IGlassAppCbk
 import com.anezium.taskerbridge.shared.ControlMessage
 import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
 import com.rokid.cxr.Caps
-import com.rokid.cxr.link.CXRLink
-import com.rokid.cxr.link.callbacks.ICXRLinkCbk
-import com.rokid.cxr.link.callbacks.ICustomCmdCbk
-import com.rokid.cxr.link.callbacks.IGlassAppCbk
-import com.rokid.cxr.link.utils.CxrDefs
-import com.rokid.cxr.link.utils.GlassInfo
-import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
-import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import java.io.File
 
 data class HelperApkInfo(
@@ -78,9 +77,9 @@ class CxrPhoneController(
 
         override fun onGlassAiAssistStart() = Unit
         override fun onGlassAiAssistStop() = Unit
-        override fun onGlassDeviceInfo(deviceInfo: GlassInfo) = Unit
+        override fun onGlassDeviceInfo(info: GlassInfo) = Unit
         override fun onGlassWearingStatus(wearing: Boolean) = Unit
-        override fun onGlassAiInterrupt(interruptWake: Boolean) = Unit
+        override fun onGlassAiInterrupt(interrupted: Boolean) = Unit
     }
 
     private val commandCallback = object : ICustomCmdCbk {
@@ -126,7 +125,7 @@ class CxrPhoneController(
         }
 
         override fun onStopAppResult(success: Boolean) = onLog("Helper stop: $success")
-        override fun onGlassAppResume(resumed: Boolean) = onLog("Helper resumed: $resumed")
+        override fun onGlassAppResume(resume: Boolean) = onLog("Helper resumed: $resume")
         override fun onQueryAppResult(installed: Boolean) = onLog("Helper installed: $installed")
     }
 
@@ -143,7 +142,7 @@ class CxrPhoneController(
 
         override fun onOpenAppResult(success: Boolean) = Unit
         override fun onStopAppResult(success: Boolean) = Unit
-        override fun onGlassAppResume(resumed: Boolean) = Unit
+        override fun onGlassAppResume(resume: Boolean) = Unit
         override fun onQueryAppResult(installed: Boolean) = Unit
     }
 
@@ -249,7 +248,7 @@ class CxrPhoneController(
         cxrConnected = false
         btConnected = false
         onConnectionChanged(false, false)
-        val bound = bindGlobalHiRokidService(nextLink, token)
+        val bound = nextLink.connect(token)
         if (bound) {
             onLog("Binding to global Hi Rokid service...")
         } else {
@@ -335,7 +334,7 @@ class CxrPhoneController(
                 override fun onUnInstallAppResult(success: Boolean) = Unit
                 override fun onOpenAppResult(success: Boolean) = Unit
                 override fun onStopAppResult(success: Boolean) = Unit
-                override fun onGlassAppResume(resumed: Boolean) = Unit
+                override fun onGlassAppResume(resume: Boolean) = Unit
 
                 override fun onQueryAppResult(installed: Boolean) {
                     onLog("Helper installed: $installed")
@@ -449,35 +448,6 @@ class CxrPhoneController(
         return raw
     }
 
-    private fun bindGlobalHiRokidService(link: CXRLink, authToken: String): Boolean {
-        return runCatching {
-            val connection = findServiceConnection(link)
-            val intent = Intent(MEDIA_SERVICE_ACTION)
-                .setPackage(GLOBAL_AI_APP_PACKAGE)
-                .putExtra(AUTH_TOKEN_EXTRA, authToken)
-                .putExtra(AUTH_PACKAGE_EXTRA, context.applicationContext.packageName)
-            context.applicationContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-        }.getOrElse {
-            onError("Reflection bind failed.", it)
-            false
-        }
-    }
-
-    private fun findServiceConnection(link: CXRLink): ServiceConnection {
-        var type: Class<*>? = link.javaClass
-        while (type != null) {
-            val field = type.declaredFields.firstOrNull { field ->
-                ServiceConnection::class.java.isAssignableFrom(field.type)
-            }
-            if (field != null) {
-                field.isAccessible = true
-                return field.get(link) as ServiceConnection
-            }
-            type = type.superclass
-        }
-        error("CXR-L ServiceConnection field not found")
-    }
-
     private fun isGlobalHiRokidInstalled(context: Context): Boolean {
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -552,9 +522,6 @@ class CxrPhoneController(
         private const val GLOBAL_AI_APP_PACKAGE = "com.rokid.sprite.global.aiapp"
         private const val AUTH_ACTIVITY_CLASS = "com.rokid.sprite.aiapp.externalapp.auth.AuthorizationActivity"
         private const val AUTH_ACTION = "com.rokid.sprite.aiapp.externalapp.AUTHORIZATION"
-        private const val MEDIA_SERVICE_ACTION = "com.rokid.sprite.aiapp.externalapp.MEDIA_STREAM_SERVICE"
-        private const val AUTH_TOKEN_EXTRA = "auth_token"
-        private const val AUTH_PACKAGE_EXTRA = "auth_package"
         private const val CONNECT_ATTEMPT_TIMEOUT_MS = 45_000L
     }
 }

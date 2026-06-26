@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.31 - 2026-06-26
+
+### Preview Fix
+
+- Move the phone CXR-L bridge to the same `CxrGlobal` Global Hi Rokid wrapper used by Rokid Relay, removing Tasker Bridge's reflection-based bind to the upstream SDK internals.
+- Keep the preview.30 idempotent CXR-L runtime behavior: visible-HUD retries reuse the active/connecting CXR-L link instead of resetting it.
+- Stop the glasses helper CXR fallback with the SDK disconnect call when the HUD leaves foreground, so the fallback is not kept alive after normal app switching.
+- Align the Android build with the wrapper's Gradle/AGP versions so the CXR-L native Caps path is packaged through the same route as Relay.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper is now `0.2.6-preview.17`; tap **Install HUD** / reinstall on the glasses after installing the phone APK.
+- This still does not keep CXR-L alive while idle. CXR-L remains a visible-HUD/session fallback, not a background keepalive.
+
 ## v0.2.9-preview.30 - 2026-06-26
 
 ### Preview Fix
