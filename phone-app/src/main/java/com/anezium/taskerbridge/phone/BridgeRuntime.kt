@@ -110,12 +110,14 @@ class BridgeRuntime private constructor(context: Context) {
         if (firstStart) {
             started = true
         }
-        refreshRuntimeState(if (firstStart) "Bridge runtime started." else _state.value.lastStatus)
+        refreshRuntimeState(
+            defaultStatus = if (firstStart) "Bridge runtime started." else _state.value.lastStatus,
+        )
         refreshTasker(sendToGlasses = false)
     }
 
     fun refreshDiagnostics() {
-        refreshRuntimeState(_state.value.lastStatus)
+        refreshRuntimeState(defaultStatus = _state.value.lastStatus)
     }
 
     private fun refreshRuntimeState(defaultStatus: String) {
@@ -123,8 +125,9 @@ class BridgeRuntime private constructor(context: Context) {
         if (companionLinked) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
-        val wake = if (BleWakeServer.isArmed(appContext)) {
-            BleWakeServer.ensureStarted(appContext)
+        val wakeArmed = BleWakeServer.isArmed(appContext)
+        val wake = if (wakeArmed) {
+            BleWakeServer.health(appContext)
         } else {
             null
         }
@@ -134,7 +137,11 @@ class BridgeRuntime private constructor(context: Context) {
             helperBundledVersion = cxr.bundledHelperVersionLabel(),
             helperLastInstalledVersion = cxr.lastInstalledHelperVersionLabel(),
             companionLinked = companionLinked,
-            bluetoothServerActive = wake?.active ?: _state.value.bluetoothServerActive,
+            bluetoothServerActive = if (wakeArmed) {
+                true
+            } else {
+                wake?.active ?: _state.value.bluetoothServerActive
+            },
             bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
             wakeDiagnostics = BridgeDiagnostics.summary(appContext),
             lastStatus = wake?.status ?: defaultStatus,

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.14 - 2026-06-26
+
+### Preview Fix
+
+- Make phone app diagnostic refresh read-only so opening Tasker Bridge after a long-idle HUD failure does not re-arm BLE and overwrite the `Wake debug ...` evidence.
+- Keep active repair paths in the foreground wake service, HUD wake session, explicit Arm wake bridge action, and watchdog.
+- Preserve the no-drain glasses behavior: no extra HUD background work, no longer beacon window, and no CXR-L runtime reconnect.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled HUD helper remains `0.2.6-preview.9`; tap **Install HUD** only if the glasses do not already show that bundled helper from preview.13.
+- If long-idle launch still fails, open the phone app immediately and send the `Wake debug ...` line before tapping Arm/Launch again.
+
 ## v0.2.9-preview.13 - 2026-06-26
 
 ### Preview Fix
