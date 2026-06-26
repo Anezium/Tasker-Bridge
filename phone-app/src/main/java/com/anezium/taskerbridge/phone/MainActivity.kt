@@ -164,6 +164,7 @@ private fun PhoneScreen(
                         StatusRow("Setup link", state.setupLinkLabel(), state.cxrConnected || state.glassBtConnected)
                         StatusRow("Bundled version", state.helperBundledVersion, state.helperBundledVersion != "unknown")
                         StatusRow("Installed version", state.helperLastInstalledVersion, state.helperLastInstalledVersion != "none recorded")
+                        StatusRow("Running HUD", state.helperRuntimeVersion, state.helperRuntimeCurrent)
                         SmallText(state.helperInstallStatus)
                         BridgeButton(
                             "Install HUD",

@@ -105,6 +105,8 @@ data class StatusMessage(
     val taskName: String = "",
     val selectedIndex: Int = -1,
     val requestId: String = "",
+    val appVersion: String = "",
+    val appVersionCode: Long = -1L,
     val protocolVersion: Int = Protocol.PROTOCOL_VERSION,
     val peerRole: String = Protocol.HELPER_ROLE,
     val timestampMs: Long = System.currentTimeMillis(),
@@ -203,6 +205,8 @@ object JsonProtocol {
         .put("taskName", message.taskName)
         .put("selectedIndex", message.selectedIndex)
         .put("requestId", message.requestId)
+        .put("appVersion", message.appVersion)
+        .put("appVersionCode", message.appVersionCode)
         .put("protocolVersion", message.protocolVersion)
         .put("peerRole", message.peerRole)
         .put("timestampMs", message.timestampMs)
@@ -216,6 +220,8 @@ object JsonProtocol {
             taskName = json.optString("taskName"),
             selectedIndex = json.optInt("selectedIndex", -1),
             requestId = json.optString("requestId"),
+            appVersion = json.optString("appVersion"),
+            appVersionCode = json.optLong("appVersionCode", -1L),
             protocolVersion = json.optInt("protocolVersion", 1),
             peerRole = json.optString("peerRole", Protocol.HELPER_ROLE),
             timestampMs = json.optLong("timestampMs", System.currentTimeMillis()),

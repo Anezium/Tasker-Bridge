@@ -55,6 +55,7 @@ class CxrPhoneController(
     private var pendingForceReinstall = false
     private var installStarted = false
     private var uninstallStarted = false
+    private var bundledHelperInfoCache: HelperApkInfo? = null
 
     private val linkCallback = object : ICXRLinkCbk {
         override fun onCXRLConnected(connected: Boolean) {
@@ -152,8 +153,13 @@ class CxrPhoneController(
     fun canStartRuntimeFallback(): Boolean =
         token.isNotBlank() && isWifiEnabled()
 
+    fun bundledHelperInfo(): HelperApkInfo? {
+        bundledHelperInfoCache?.let { return it }
+        return readBundledHelperInfo()?.also { bundledHelperInfoCache = it }
+    }
+
     fun bundledHelperVersionLabel(): String =
-        readBundledHelperInfo()?.label ?: "unknown"
+        bundledHelperInfo()?.label ?: "unknown"
 
     fun lastInstalledHelperVersionLabel(): String =
         prefs.getString(KEY_HELPER_INSTALLED_VERSION_NAME, null)
@@ -317,7 +323,7 @@ class CxrPhoneController(
                 override fun onQueryAppResult(installed: Boolean) {
                     onLog("Helper installed: $installed")
                     if (installed) {
-                        val bundled = readBundledHelperInfo()
+                        val bundled = bundledHelperInfo()
                         if (bundled != null && shouldRefreshInstalledHelper(bundled)) {
                             onInstallStatus("Helper update needed: bundled ${bundled.label}.", true)
                             installHelper(forceReinstall = true)

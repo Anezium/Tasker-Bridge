@@ -391,6 +391,8 @@ class BluetoothBridgeClient(
                     StatusMessage(
                         type = StatusType.HELLO,
                         message = "Helper Bluetooth ready",
+                        appVersion = BuildConfig.VERSION_NAME,
+                        appVersionCode = BuildConfig.VERSION_CODE.toLong(),
                         peerRole = Protocol.HELPER_ROLE,
                     ),
                 ),

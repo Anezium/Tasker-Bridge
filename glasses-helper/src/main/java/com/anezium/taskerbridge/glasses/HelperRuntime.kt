@@ -495,7 +495,8 @@ class HelperRuntime private constructor(context: Context) {
         onSent: (() -> Unit)? = null,
     ) {
         scope.launch {
-            val sent = bridge.send(message) || cxr.send(message)
+            val versionedMessage = message.withHelperVersion()
+            val sent = bridge.send(versionedMessage) || cxr.send(versionedMessage)
             if (!sent) {
                 onNotSent?.invoke()
             } else {
@@ -507,6 +508,12 @@ class HelperRuntime private constructor(context: Context) {
     private fun onMain(block: () -> Unit) {
         scope.launch(Dispatchers.Main.immediate) { block() }
     }
+
+    private fun StatusMessage.withHelperVersion(): StatusMessage =
+        copy(
+            appVersion = BuildConfig.VERSION_NAME,
+            appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+        )
 
     companion object {
         @Volatile

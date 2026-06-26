@@ -519,6 +519,7 @@ class BridgeRuntime private constructor(context: Context) {
     }
 
     private fun handleHelperMessage(message: StatusMessage) {
+        recordHelperRuntimeVersion(message)
         when (message.type) {
             StatusType.READY -> {
                 _state.value = _state.value.copy(
@@ -561,6 +562,28 @@ class BridgeRuntime private constructor(context: Context) {
                 _state.value = _state.value.copy(lastStatus = "HUD pong: ${message.message}")
             }
         }
+    }
+
+    private fun recordHelperRuntimeVersion(message: StatusMessage) {
+        val label = message.helperRuntimeVersionLabel()
+        val bundled = cxr.bundledHelperInfo()
+        val current = bundled?.let { message.matchesBundledHelper(it) } ?: false
+        val currentState = _state.value
+        val installStatus = when {
+            current -> "Running HUD helper $label."
+            bundled != null -> "Running HUD helper is old ($label); tap Install HUD to reinstall ${bundled.label}."
+            else -> "Running HUD helper $label; bundled helper version unknown."
+        }
+        _state.value = currentState.copy(
+            helperBundledVersion = bundled?.label ?: currentState.helperBundledVersion,
+            helperRuntimeVersion = label,
+            helperRuntimeCurrent = current,
+            helperInstallStatus = if (currentState.helperInstallBusy) {
+                currentState.helperInstallStatus
+            } else {
+                installStatus
+            },
+        )
     }
 
     private suspend fun sendSnapshotToGlasses(snapshot: TaskerSnapshot) {
@@ -675,6 +698,19 @@ class BridgeRuntime private constructor(context: Context) {
 
 private fun Int.coerceInTaskBounds(tasks: List<*>): Int =
     if (tasks.isEmpty()) 0 else coerceIn(0, tasks.lastIndex)
+
+private fun StatusMessage.helperRuntimeVersionLabel(): String {
+    val name = appVersion.ifBlank { "legacy/unknown" }
+    return if (appVersionCode >= 0L) "$name ($appVersionCode)" else name
+}
+
+private fun StatusMessage.matchesBundledHelper(info: HelperApkInfo): Boolean =
+    when {
+        appVersionCode >= 0L -> appVersionCode == info.versionCode &&
+            (appVersion.isBlank() || appVersion == info.versionName)
+        appVersion.isNotBlank() -> appVersion == info.versionName
+        else -> false
+    }
 
 private fun TaskerSnapshot.fingerprint(selectedIndex: Int): String = buildString {
     append(installed).append('|')
