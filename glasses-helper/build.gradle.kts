@@ -38,8 +38,8 @@ android {
         applicationId = "com.anezium.taskerbridge.glasses"
         minSdk = 31
         targetSdk = 28
-        versionCode = 34
-        versionName = "0.2.6-preview.19"
+        versionCode = 37
+        versionName = "0.2.6-preview.22"
     }
 
     compileOptions {
@@ -90,6 +90,5 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.rokid.service.bridge)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

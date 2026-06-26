@@ -379,7 +379,7 @@ class BluetoothBridgeClient(
         val handshakeActive = java.util.concurrent.atomic.AtomicBoolean(true)
         val timeoutJob = scope.launch {
             delay(HANDSHAKE_TIMEOUT_MS)
-            if (handshakeActive.get() && socket === connectedSocket) {
+            if (handshakeActive.get()) {
                 Log.w(TAG, "Bluetooth phone handshake timed out")
                 runCatching { connectedSocket.close() }
             }

@@ -31,6 +31,7 @@ class BridgeRuntime private constructor(context: Context) {
     private var lastAuthorizationRequestAtMs = 0L
     private var lastHudTaskRequestAtMs = 0L
     private var lastBluetoothConnectedAtMs = 0L
+    private var lastBluetoothSessionStartAtMs = 0L
     private var lastHudPingAtMs = 0L
     private var nextHudPingId = 0L
     private var lastTaskListSentAtMs = 0L
@@ -66,22 +67,12 @@ class BridgeRuntime private constructor(context: Context) {
         },
         onConnectionChanged = { cxrConnected, btConnected ->
             onMain {
-                val wasRuntimeCxrReady = _state.value.cxrConnected && _state.value.glassBtConnected
                 _state.value = _state.value.copy(
                     authorized = _state.value.authorized || cxrConnected || btConnected,
                     cxrConnected = cxrConnected,
                     glassBtConnected = btConnected,
                 )
                 continuePendingCxrSetup()
-                val runtimeCxrReady = cxrConnected && btConnected
-                if (
-                    runtimeCxrReady &&
-                    !wasRuntimeCxrReady &&
-                    _state.value.bridgeServiceActive &&
-                    cxrSetup.isIdle()
-                ) {
-                    sendCachedTasksThenRefresh()
-                }
             }
         },
         onInstallStatus = { message, busy ->
@@ -238,13 +229,16 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.ensureStarted(appContext)
-        if (cxrSetup.isIdle() && cxr.canStartRuntimeFallback()) {
-            cxr.connect()
-        }
+        val now = SystemClock.elapsedRealtime()
+        val restartDebounced = lastBluetoothSessionStartAtMs > 0L &&
+            now - lastBluetoothSessionStartAtMs < BLUETOOTH_SESSION_RESTART_DEBOUNCE_MS
+        lastBluetoothSessionStartAtMs = now
         if (
             _state.value.bluetoothConnected &&
-            SystemClock.elapsedRealtime() - lastBluetoothConnectedAtMs < FRESH_BLUETOOTH_CONNECTION_MS
+            now - lastBluetoothConnectedAtMs < FRESH_BLUETOOTH_CONNECTION_MS
         ) {
+            bluetooth.start()
+        } else if (restartDebounced) {
             bluetooth.start()
         } else {
             bluetooth.restart()
@@ -593,7 +587,7 @@ class BridgeRuntime private constructor(context: Context) {
         val nonce = "hud-${now}-${++nextHudPingId}"
         scope.launch {
             val ping = ControlMessage.Ping(nonce)
-            val sent = bluetooth.send(ping) || cxr.sendControl(ping)
+            val sent = bluetooth.send(ping)
             if (!sent) {
                 bluetooth.restart()
             }
@@ -637,7 +631,7 @@ class BridgeRuntime private constructor(context: Context) {
             externalAccess = snapshot.externalAccess && snapshot.runPermissionGranted,
             message = snapshot.message,
         )
-        val sent = bluetooth.send(message) || cxr.sendControl(message)
+        val sent = bluetooth.send(message)
         if (!sent) {
             bluetooth.restart()
             BridgeDiagnostics.record(appContext, "Task list send failed; Bluetooth session restarted")
@@ -652,7 +646,7 @@ class BridgeRuntime private constructor(context: Context) {
     }
 
     private suspend fun sendLaunchResultToGlasses(message: ControlMessage.LaunchResult) {
-        val delivered = bluetooth.send(message) || cxr.sendControl(message)
+        val delivered = bluetooth.send(message)
         if (!delivered) {
             bluetooth.restart()
             BridgeDiagnostics.record(appContext, "Launch result send failed; Bluetooth session restarted")
@@ -728,6 +722,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val TASK_REQUEST_DEBOUNCE_MS = 800L
         private const val CXR_RELEASE_DELAY_MS = 1_500L
         private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
+        private const val BLUETOOTH_SESSION_RESTART_DEBOUNCE_MS = 25_000L
         private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
         private const val RFCOMM_FORCE_REARM_INTERVAL_MS = 5 * 60 * 1000L
         private const val RFCOMM_STALE_CONNECTION_MS = 4 * 60 * 1000L
@@ -749,7 +744,7 @@ private fun Int.coerceInTaskBounds(tasks: List<*>): Int =
     if (tasks.isEmpty()) 0 else coerceIn(0, tasks.lastIndex)
 
 private fun PhoneUiState.hudTransportConnected(): Boolean =
-    bluetoothConnected || (cxrConnected && glassBtConnected)
+    bluetoothConnected
 
 private fun StatusMessage.helperRuntimeVersionLabel(): String {
     val name = appVersion.ifBlank { "legacy/unknown" }

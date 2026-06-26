@@ -270,7 +270,7 @@ class BridgeForegroundService : Service() {
         private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        private const val RUNTIME_FALLBACK_START_GRACE_MS = 3_000L
+        private const val RUNTIME_FALLBACK_START_GRACE_MS = 15_000L
         private const val RUNTIME_FALLBACK_MAX_CONNECTED_CHECKS = 6
 
         @Volatile
@@ -472,4 +472,4 @@ private fun PhoneUiState.notificationText(): String = when {
 }
 
 private fun PhoneUiState.hudTransportConnected(): Boolean =
-    bluetoothConnected || (cxrConnected && glassBtConnected)
+    bluetoothConnected

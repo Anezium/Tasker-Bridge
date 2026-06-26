@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.9-preview.37 - 2026-06-26
+
+### Preview Fix
+
+- Make the visible HUD runtime Bluetooth-only: task list loading, selection sync, pings, and launch results no longer start or depend on the glasses-side CXR fallback.
+- Keep CXR-L only for phone-side setup actions such as installing or opening the HUD helper from the phone.
+- Remove the glasses helper CXR runtime bridge and its dependency, reducing the chance of stale native CXR state or glasses battery drain after leaving the Tasker Bridge HUD.
+- Keep the post-wake grace check strict: the phone now treats only the custom Bluetooth HUD link as a real Tasker runtime transport.
+- Debounce repeated HUD BLE beacons on the phone so a visible-HUD wake pulse does not repeatedly restart the RFCOMM session while it is connecting.
+- Stop the glasses BLE wake beacon as soon as Bluetooth connects or a task list arrives, and slow retry wake pulses/restarts so the visible HUD does not keep advertising while the phone link is already alive.
+- Close half-open Bluetooth handshake sockets unconditionally on timeout, preventing a failed deep-idle wake from leaving RFCOMM stuck in a connected-but-waiting state.
+- Delay the phone-to-HUD callback dial after wake so the phone listens first and avoids racing the HUD's own RFCOMM connect attempt.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper is now `0.2.6-preview.22`; tap **Install HUD** / reinstall on the glasses after installing the phone APK.
+- Tap **Arm wake bridge** once after install, then run the same several-hours idle test from the glasses.
+
 ## v0.2.9-preview.36 - 2026-06-26
 
 ### Preview Fix

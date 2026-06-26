@@ -18,7 +18,6 @@ import com.example.cxrglobal.auth.AuthorizationHelper
 import com.example.cxrglobal.callbacks.ICXRLinkCbk
 import com.example.cxrglobal.callbacks.ICustomCmdCbk
 import com.example.cxrglobal.callbacks.IGlassAppCbk
-import com.anezium.taskerbridge.shared.ControlMessage
 import com.anezium.taskerbridge.shared.JsonProtocol
 import com.anezium.taskerbridge.shared.Protocol
 import com.anezium.taskerbridge.shared.StatusMessage
@@ -152,9 +151,6 @@ class CxrPhoneController(
     fun isAuthorized(): Boolean = token.isNotBlank()
 
     fun isConnected(): Boolean = cxrConnected || btConnected
-
-    fun canStartRuntimeFallback(): Boolean =
-        token.isNotBlank() && isWifiEnabled()
 
     fun bundledHelperInfo(): HelperApkInfo? {
         bundledHelperInfoCache?.let { return it }
@@ -371,21 +367,6 @@ class CxrPhoneController(
 
     fun stopHelper() {
         link?.appStop(appCallback) ?: onError("CXR-L is not connected.", null)
-    }
-
-    fun sendControl(message: ControlMessage): Boolean {
-        val activeLink = link ?: return false
-        val raw = JsonProtocol.encodeControl(message)
-        return runCatching {
-            val result = activeLink.sendCustomCmd(
-                Protocol.CONTROL_CHANNEL,
-                Caps().apply { write(raw) },
-            )
-            result != null && result >= 0
-        }.getOrElse {
-            Log.w(TAG, "CXR control send failed", it)
-            false
-        }
     }
 
     private fun helperApkCandidates(): List<File> {

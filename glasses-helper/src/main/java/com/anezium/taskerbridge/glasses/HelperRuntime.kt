@@ -35,15 +35,9 @@ class HelperRuntime private constructor(context: Context) {
         onLog = { message -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
         onError = { message, _ -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
     )
-    private val cxr = CxrFallbackBridge(
-        onState = { state -> onMain { handleCxrState(state) } },
-        onMessage = { message -> onMain { handleControlMessage(message) } },
-        onLog = { message -> onMain { _state.value = _state.value.copy(bridgeState = message) } },
-    )
 
     private var started = false
     private var bluetoothConnected = false
-    private var cxrConnected = false
     private var taskListReceived = false
     private var wakeRequestInFlight = false
     private var taskRequestRetryJob: Job? = null
@@ -65,7 +59,6 @@ class HelperRuntime private constructor(context: Context) {
             lastTaskListReceivedAtMs = 0L
             _state.value = _state.value.copy(bridgeState = "Waking phone")
             bridge.start()
-            cxr.start()
             requestPhoneWake("HUD opened")
             return
         }
@@ -89,7 +82,6 @@ class HelperRuntime private constructor(context: Context) {
         BleWakeAdvertiser.cancel()
         BleWakeClient.cancel()
         bridge.stop()
-        cxr.stop()
         if (!wasStarted) return
     }
 
@@ -180,40 +172,16 @@ class HelperRuntime private constructor(context: Context) {
         val wasConnected = _state.value.phoneConnected
         bluetoothConnected = state.connected
         _state.value = _state.value.copy(
-            phoneConnected = bluetoothConnected || cxrConnected,
-            phoneName = when {
-                bluetoothConnected -> state.peerName
-                cxrConnected -> "CXR-L"
-                else -> state.peerName
-            },
-            bridgeState = if (!bluetoothConnected && cxrConnected) {
-                "Phone connected via CXR"
-            } else {
-                state.status
-            },
+            phoneConnected = bluetoothConnected,
+            phoneName = state.peerName,
+            bridgeState = state.status,
         )
         if (_state.value.phoneConnected && !wasConnected) {
+            BleWakeAdvertiser.cancel()
+            BleWakeClient.cancel()
+            wakeRequestInFlight = false
             sendStatus(StatusMessage(StatusType.READY, "Helper ready over Bluetooth"))
             requestTasks("Bluetooth connected")
-            retryPendingLaunch()
-        }
-    }
-
-    private fun handleCxrState(state: CxrBridgeState) {
-        val wasConnected = _state.value.phoneConnected
-        cxrConnected = state.connected
-        _state.value = _state.value.copy(
-            phoneConnected = bluetoothConnected || cxrConnected,
-            phoneName = if (cxrConnected) "CXR-L" else _state.value.phoneName,
-            bridgeState = if (!cxrConnected && bluetoothConnected) {
-                "Phone connected via Bluetooth"
-            } else {
-                state.status
-            },
-        )
-        if (_state.value.phoneConnected && !wasConnected) {
-            sendStatus(StatusMessage(StatusType.READY, "Helper ready over CXR"))
-            requestTasks("CXR connected")
             retryPendingLaunch()
         }
     }
@@ -363,6 +331,9 @@ class HelperRuntime private constructor(context: Context) {
                 _state.value = _state.value.copy(status = "Ignored unknown phone message")
             }
             is ControlMessage.TaskList -> {
+                BleWakeAdvertiser.cancel()
+                BleWakeClient.cancel()
+                wakeRequestInFlight = false
                 taskListReceived = true
                 lastTaskListReceivedAtMs = SystemClock.elapsedRealtime()
                 taskRequestRetryJob?.cancel()
@@ -467,11 +438,6 @@ class HelperRuntime private constructor(context: Context) {
     }
 
     private fun requestPhoneWake(reason: String) {
-        BleWakeAdvertiser.pulse(appContext) { message ->
-            if (started) {
-                _state.value = _state.value.copy(bridgeState = message)
-            }
-        }
         val now = SystemClock.elapsedRealtime()
         if (wakeRequestInFlight || now - lastWakeRequestAtMs < WAKE_REQUEST_MIN_INTERVAL_MS) {
             sendTaskRequest(reason)
@@ -479,6 +445,11 @@ class HelperRuntime private constructor(context: Context) {
         }
         wakeRequestInFlight = true
         lastWakeRequestAtMs = now
+        BleWakeAdvertiser.pulse(appContext) { message ->
+            if (started) {
+                _state.value = _state.value.copy(bridgeState = message)
+            }
+        }
         BleWakeClient.requestWake(appContext) { ok, message ->
             onMain {
                 wakeRequestInFlight = false
@@ -505,7 +476,7 @@ class HelperRuntime private constructor(context: Context) {
     ) {
         scope.launch {
             val versionedMessage = message.withHelperVersion()
-            val sent = bridge.send(versionedMessage) || cxr.send(versionedMessage)
+            val sent = bridge.send(versionedMessage)
             if (!sent) {
                 onNotSent?.invoke()
             } else {
@@ -535,12 +506,12 @@ class HelperRuntime private constructor(context: Context) {
         }
 
         private const val TASK_REQUEST_MIN_INTERVAL_MS = 1_000L
-        private const val WAKE_REQUEST_MIN_INTERVAL_MS = 12_000L
-        private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 12_000L
+        private const val WAKE_REQUEST_MIN_INTERVAL_MS = 30_000L
+        private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val SUSTAINED_TASK_RETRY_INTERVAL_MS = 120_000L
         private const val SUSTAINED_LAUNCH_RETRY_INTERVAL_MS = 120_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
-        private const val STALE_CONNECTED_RETRY_INDEX = 1
+        private const val STALE_CONNECTED_RETRY_INDEX = 3
         private val LAUNCH_RETRY_DELAYS_MS = longArrayOf(
             1_000L,
             2_500L,

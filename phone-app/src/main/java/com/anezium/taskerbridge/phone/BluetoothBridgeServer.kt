@@ -308,6 +308,8 @@ class BluetoothBridgeServer(
 
     private suspend fun callbackLoop() {
         val loopJob = currentCoroutineContext()[Job]
+        delay(CALLBACK_INITIAL_DELAY_MS)
+        if (!callbackLoopActive(loopJob) || socket != null) return
         var attempts = 0
         while (callbackLoopActive(loopJob) && attempts < CALLBACK_CONNECT_ATTEMPTS) {
             if (socket != null) break
@@ -507,7 +509,7 @@ class BluetoothBridgeServer(
         val handshakeActive = java.util.concurrent.atomic.AtomicBoolean(true)
         val timeoutJob = scope.launch {
             delay(HANDSHAKE_TIMEOUT_MS)
-            if (handshakeActive.get() && socket === acceptedSocket) {
+            if (handshakeActive.get()) {
                 Log.w(TAG, "Bluetooth HUD handshake timed out")
                 runCatching { acceptedSocket.close() }
             }
@@ -721,6 +723,7 @@ class BluetoothBridgeServer(
         private const val KEY_TRUSTED_GLASSES_ADDRESS = "trusted_glasses_address"
         private const val KEY_LAST_GLASSES_ADDRESS = "last_glasses_address"
         private const val SERVER_RETRY_DELAY_MS = 30_000L
+        private const val CALLBACK_INITIAL_DELAY_MS = 15_000L
         private const val CALLBACK_RETRY_DELAY_MS = 5_000L
         private const val CALLBACK_CONNECT_TIMEOUT_MS = 12_000L
         private const val CALLBACK_CONNECT_ATTEMPTS = 8

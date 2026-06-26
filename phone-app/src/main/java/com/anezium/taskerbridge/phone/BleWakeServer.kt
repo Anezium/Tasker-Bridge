@@ -253,19 +253,23 @@ object BleWakeServer {
         Log.i(TAG, "HUD BLE beacon received count=${results.size}")
         BridgeDiagnostics.recordWake(cleanContext, "HUD BLE beacon received count=${results.size}")
         val now = SystemClock.elapsedRealtime()
-        val duplicate = now - lastHudBeaconWakeAtMs < HUD_BEACON_WAKE_DEBOUNCE_MS
-        if (!duplicate) {
-            lastHudBeaconWakeAtMs = now
-        }
+        val duplicate = lastHudBeaconWakeAtMs > 0L &&
+            now - lastHudBeaconWakeAtMs < HUD_BEACON_WAKE_DEBOUNCE_MS
         holdPhoneAwake(cleanContext, "HUD beacon")
+        if (duplicate) {
+            BridgeDiagnostics.record(cleanContext, "HUD beacon duplicate ignored")
+            ensureStarted(cleanContext)
+            return true
+        }
+        lastHudBeaconWakeAtMs = now
         val started = BridgeForegroundService.startSession(
             cleanContext,
-            if (duplicate) "HUD BLE beacon refresh" else "HUD BLE beacon",
+            "HUD BLE beacon",
         )
         BridgeDiagnostics.record(
             cleanContext,
             if (started) {
-                if (duplicate) "HUD beacon refreshed session start" else "HUD beacon posted session start"
+                "HUD beacon posted session start"
             } else {
                 "HUD beacon session start failed"
             },
@@ -517,7 +521,7 @@ object BleWakeServer {
 
     private const val SCAN_START_SUCCESS = 0
     private const val WAKE_SCAN_REQUEST_CODE = 72_411
-    private const val HUD_BEACON_WAKE_DEBOUNCE_MS = 5_000L
+    private const val HUD_BEACON_WAKE_DEBOUNCE_MS = 25_000L
     private const val PHONE_WAKE_HOLD_MS = 45_000L
     private const val PHONE_WAKE_LOCK_TAG = "TaskerBridge:HudWake"
 }
