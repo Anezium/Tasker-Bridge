@@ -41,12 +41,13 @@ object BridgeDiagnostics {
     fun summary(context: Context): String {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val event = prefs.getString(KEY_LAST_EVENT, "").orEmpty()
-        if (event.isBlank()) return "No wake events recorded yet."
+        val maintenance = "${BridgeWakeScheduler.summary(context)} | ${BleWakeServer.rebuildSummary()}"
+        if (event.isBlank()) return "No wake events recorded yet. | $maintenance"
         val at = prefs.getLong(KEY_LAST_EVENT_AT, 0L)
         val time = if (at > 0L) DateFormat.format("HH:mm:ss", at).toString() else "--:--:--"
         val wakeCount = prefs.getInt(KEY_WAKE_COUNT, 0)
         val failures = prefs.getInt(KEY_SESSION_START_FAILURES, 0)
-        return "Wake debug $time: $event | wakes=$wakeCount failures=$failures"
+        return "Wake debug $time: $event | wakes=$wakeCount failures=$failures | $maintenance"
     }
 
     private const val MAX_EVENT_CHARS = 120

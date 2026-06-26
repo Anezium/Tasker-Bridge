@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.19 - 2026-06-26
+
+### Preview Fix
+
+- Add phone-side wake maintenance details to the `Wake debug` line, including the scheduled rearm mode, next rearm estimate, and last BLE wake rebuild age.
+- Keep the long-idle repair strategy phone-only: no helper changes, no longer glasses beacon window, and no CXR-L runtime reconnect.
+- Preserve preview.18's forced phone BLE wake rebuild cadence while making future long-idle failures easier to diagnose without opening or rearming the bridge first.
+
+### Upgrade Notes
+
+- Install the new phone APK, then tap **Arm wake bridge** once.
+- Bundled HUD helper remains `0.2.6-preview.10`; reinstall HUD only if it is older.
+- If long-idle wake still fails, open the phone app immediately and send the full `Wake debug ...` line.
+
 ## v0.2.9-preview.18 - 2026-06-26
 
 ### Preview Fix

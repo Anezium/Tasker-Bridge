@@ -178,6 +178,20 @@ object BleWakeServer {
         return state
     }
 
+    fun rebuildSummary(): String {
+        val last = lastWakeRebuildAtMs
+        if (last == 0L) return "rebuild=never"
+        val ageSeconds = ((SystemClock.elapsedRealtime() - last).coerceAtLeast(0L)) / 1000L
+        val minutes = ageSeconds / 60L
+        val seconds = ageSeconds % 60L
+        val age = if (minutes > 0L) {
+            "${minutes}m${seconds}s"
+        } else {
+            "${seconds}s"
+        }
+        return "rebuild=${age} ago"
+    }
+
     fun health(context: Context): BleWakeState {
         val cleanContext = context.applicationContext
         appContext = cleanContext
