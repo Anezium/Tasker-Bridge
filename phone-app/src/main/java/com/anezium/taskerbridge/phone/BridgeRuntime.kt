@@ -583,9 +583,12 @@ class BridgeRuntime private constructor(context: Context) {
         scope.launch {
             val ping = ControlMessage.Ping(nonce)
             val sent = bluetooth.send(ping) || cxr.sendControl(ping)
+            if (!sent) {
+                bluetooth.restart()
+            }
             BridgeDiagnostics.record(
                 appContext,
-                if (sent) "HUD ping sent" else "HUD ping could not send",
+                if (sent) "HUD ping sent" else "HUD ping failed; Bluetooth session restarted",
             )
             _state.value = _state.value.copy(wakeDiagnostics = wakeDiagnosticsSummary())
         }

@@ -38,8 +38,8 @@ android {
         applicationId = "com.anezium.taskerbridge.phone"
         minSdk = 31
         targetSdk = 36
-        versionCode = 45
-        versionName = "0.2.9-preview.27"
+        versionCode = 46
+        versionName = "0.2.9-preview.28"
     }
 
     compileOptions {
