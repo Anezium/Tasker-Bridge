@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.anezium.taskerbridge.shared.ControlMessage
@@ -76,8 +77,12 @@ class BluetoothBridgeServer(
     @Volatile
     private var writer: BufferedWriter? = null
 
+    @Volatile
+    private var lastListenerRefreshAtMs: Long = 0L
+
     fun start() {
         if (connectJob?.isActive == true) return
+        lastListenerRefreshAtMs = SystemClock.elapsedRealtime()
         val newJob = scope.launch(start = CoroutineStart.LAZY) { acceptLoop() }
         connectJob = newJob
         newJob.start()
@@ -88,6 +93,7 @@ class BluetoothBridgeServer(
         val oldCallbackJob = callbackJob
         connectJob = null
         callbackJob = null
+        lastListenerRefreshAtMs = SystemClock.elapsedRealtime()
         closeSocket()
         closeServer()
         val newJob = scope.launch(start = CoroutineStart.LAZY) {
@@ -102,6 +108,52 @@ class BluetoothBridgeServer(
         callbackJob = newCallbackJob
         newJob.start()
         newCallbackJob.start()
+    }
+
+    fun refreshIdleListener(reason: String): Boolean {
+        if (socket != null) return false
+        val oldJob = connectJob
+        connectJob = null
+        lastListenerRefreshAtMs = SystemClock.elapsedRealtime()
+        closeServer()
+        val newJob = scope.launch(start = CoroutineStart.LAZY) {
+            oldJob?.cancelAndJoin()
+            acceptLoop()
+        }
+        connectJob = newJob
+        newJob.start()
+        onLog("Bluetooth listener refreshed: $reason")
+        BridgeDiagnostics.record(appContext, "RFCOMM listener refreshed: $reason")
+        return true
+    }
+
+    fun ensureFreshIdleListener(maxAgeMs: Long): Boolean {
+        if (socket != null) return false
+        val now = SystemClock.elapsedRealtime()
+        val active = connectJob?.isActive == true
+        if (!active || lastListenerRefreshAtMs == 0L || now - lastListenerRefreshAtMs >= maxAgeMs) {
+            return refreshIdleListener("idle watchdog")
+        }
+        return false
+    }
+
+    fun listenerSummary(): String {
+        val last = lastListenerRefreshAtMs
+        if (last == 0L) return "rfcomm=never"
+        val ageSeconds = ((SystemClock.elapsedRealtime() - last).coerceAtLeast(0L)) / 1000L
+        val minutes = ageSeconds / 60L
+        val seconds = ageSeconds % 60L
+        val age = if (minutes > 0L) {
+            "${minutes}m${seconds}s"
+        } else {
+            "${seconds}s"
+        }
+        val mode = when {
+            socket != null -> "connected"
+            connectJob?.isActive == true -> "listening"
+            else -> "stopped"
+        }
+        return "rfcomm=$mode ${age} ago"
     }
 
     fun stop() {
@@ -344,6 +396,7 @@ class BluetoothBridgeServer(
             )
             val activeListener = listener ?: return@runCatching null
             serverSocket = activeListener
+            lastListenerRefreshAtMs = SystemClock.elapsedRealtime()
             val paired = hasTrustedGlasses()
             onState(
                 BluetoothServerState(

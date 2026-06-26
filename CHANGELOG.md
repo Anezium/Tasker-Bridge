@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.22 - 2026-06-26
+
+### Preview Fix
+
+- Add a pending launch retry window on the glasses HUD: if a task is tapped while the phone link is stale, the HUD now wakes the phone and retries the launch request instead of failing once.
+- Add a phone-side RFCOMM idle watchdog so the classic Bluetooth listener is periodically rebuilt while the wake bridge is armed, matching the existing BLE wake rebuild strategy.
+- Push cached tasks as soon as the runtime CXR fallback becomes ready, even if the HUD request message was lost during reconnect.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.13` reaches the glasses, then tap **Arm wake bridge**.
+- The new retry work still runs only while the Tasker Bridge HUD is open; it does not add a glasses background keepalive.
+- If Alan can still reproduce after this build, send the full `Wake debug ...` line, which now includes `rfcomm=...`.
+
 ## v0.2.9-preview.21 - 2026-06-26
 
 ### Preview Fix

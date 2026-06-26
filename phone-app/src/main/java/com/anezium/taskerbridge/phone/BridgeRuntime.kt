@@ -62,12 +62,22 @@ class BridgeRuntime private constructor(context: Context) {
         },
         onConnectionChanged = { cxrConnected, btConnected ->
             onMain {
+                val wasRuntimeCxrReady = _state.value.cxrConnected && _state.value.glassBtConnected
                 _state.value = _state.value.copy(
                     authorized = _state.value.authorized || cxrConnected || btConnected,
                     cxrConnected = cxrConnected,
                     glassBtConnected = btConnected,
                 )
                 continuePendingCxrSetup()
+                val runtimeCxrReady = cxrConnected && btConnected
+                if (
+                    runtimeCxrReady &&
+                    !wasRuntimeCxrReady &&
+                    _state.value.bridgeServiceActive &&
+                    cxrSetup.isIdle()
+                ) {
+                    sendCachedTasksThenRefresh()
+                }
             }
         },
         onInstallStatus = { message, busy ->
@@ -145,7 +155,7 @@ class BridgeRuntime private constructor(context: Context) {
                 wake?.active ?: _state.value.bluetoothServerActive
             },
             bluetoothStatus = wake?.status ?: _state.value.bluetoothStatus,
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = wake?.status ?: defaultStatus,
         )
     }
@@ -164,7 +174,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothPairingMode = false,
             bluetoothStatus = if (companionLinked) wake.status else "${wake.status}; companion link needed",
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = if (companionLinked) wake.status else "Link glasses for reliable background wake.",
         )
         refreshTasker(sendToGlasses = false)
@@ -240,7 +250,7 @@ class BridgeRuntime private constructor(context: Context) {
             bridgeServiceActive = true,
             bluetoothServerActive = true,
             bluetoothStatus = if (wake.active) "Opening HUD session." else wake.status,
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = "Opening HUD session: $reason",
         )
         refreshTasker(sendToGlasses = false)
@@ -252,12 +262,17 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.ensureFresh(appContext, WAKE_FORCE_REARM_INTERVAL_MS)
+        val rfcommRefreshed = bluetooth.ensureFreshIdleListener(RFCOMM_FORCE_REARM_INTERVAL_MS)
         BridgeWakeScheduler.schedule(appContext)
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
-            bluetoothStatus = wake.status,
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            bluetoothStatus = if (rfcommRefreshed) {
+                "${wake.status}; RFCOMM refreshed"
+            } else {
+                wake.status
+            },
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = if (wake.active) {
                 "BLE wake healthy."
             } else {
@@ -290,7 +305,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothConnected = false,
             bluetoothPairingMode = false,
             bluetoothStatus = if (wake.active) "BLE wake armed." else "HUD session stopped.",
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = if (wake.active) "HUD session ended; BLE wake remains armed." else "HUD session stopped.",
         )
     }
@@ -487,7 +502,7 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothPeerName = state.peerName,
             bluetoothPeerAddress = state.peerAddress,
             bluetoothStatus = status,
-            wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+            wakeDiagnostics = wakeDiagnosticsSummary(),
             lastStatus = status.ifBlank { _state.value.lastStatus },
         )
         if (state.connected && !wasConnected) {
@@ -558,11 +573,11 @@ class BridgeRuntime private constructor(context: Context) {
             BridgeDiagnostics.record(appContext, "Task list send failed: no HUD writer")
             _state.value = _state.value.copy(
                 lastStatus = "Waiting for HUD connection.",
-                wakeDiagnostics = BridgeDiagnostics.summary(appContext),
+                wakeDiagnostics = wakeDiagnosticsSummary(),
             )
         } else {
             BridgeDiagnostics.record(appContext, "Task list sent to HUD: ${snapshot.tasks.size}")
-            _state.value = _state.value.copy(wakeDiagnostics = BridgeDiagnostics.summary(appContext))
+            _state.value = _state.value.copy(wakeDiagnostics = wakeDiagnosticsSummary())
         }
     }
 
@@ -600,6 +615,9 @@ class BridgeRuntime private constructor(context: Context) {
         _state.value = _state.value.copy(error = message, lastStatus = message)
     }
 
+    private fun wakeDiagnosticsSummary(): String =
+        "${BridgeDiagnostics.summary(appContext)} | ${bluetooth.listenerSummary()}"
+
     private fun onMain(block: () -> Unit) {
         scope.launch(Dispatchers.Main.immediate) { block() }
     }
@@ -619,6 +637,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val CXR_RELEASE_DELAY_MS = 1_500L
         private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
         private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
+        private const val RFCOMM_FORCE_REARM_INTERVAL_MS = 5 * 60 * 1000L
 
         @Volatile
         private var instance: BridgeRuntime? = null

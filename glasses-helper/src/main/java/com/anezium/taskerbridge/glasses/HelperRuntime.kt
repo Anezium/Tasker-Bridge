@@ -18,6 +18,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 
+private data class PendingLaunchRequest(
+    val id: Long,
+    val taskName: String,
+    val selectedIndex: Int,
+    val onLaunchRequestSent: () -> Unit,
+)
+
 class HelperRuntime private constructor(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val appContext = context.applicationContext
@@ -40,10 +47,13 @@ class HelperRuntime private constructor(context: Context) {
     private var taskListReceived = false
     private var wakeRequestInFlight = false
     private var taskRequestRetryJob: Job? = null
+    private var launchRetryJob: Job? = null
+    private var pendingLaunch: PendingLaunchRequest? = null
     private var lastTaskRequestAtMs = 0L
     private var lastWakeRequestAtMs = 0L
     private var lastTaskListReceivedAtMs = 0L
     private var lastBridgeRestartAtMs = 0L
+    private var nextLaunchRequestId = 0L
 
     private val _state = MutableStateFlow(HelperUiState())
     val state: StateFlow<HelperUiState> = _state.asStateFlow()
@@ -67,6 +77,9 @@ class HelperRuntime private constructor(context: Context) {
         started = false
         taskRequestRetryJob?.cancel()
         taskRequestRetryJob = null
+        launchRetryJob?.cancel()
+        launchRetryJob = null
+        pendingLaunch = null
         wakeRequestInFlight = false
         taskListReceived = false
         lastTaskRequestAtMs = 0L
@@ -182,6 +195,7 @@ class HelperRuntime private constructor(context: Context) {
         if (_state.value.phoneConnected && !wasConnected) {
             sendStatus(StatusMessage(StatusType.READY, "Helper ready over Bluetooth"))
             requestTasks("Bluetooth connected")
+            retryPendingLaunch()
         }
     }
 
@@ -200,6 +214,7 @@ class HelperRuntime private constructor(context: Context) {
         if (_state.value.phoneConnected && !wasConnected) {
             sendStatus(StatusMessage(StatusType.READY, "Helper ready over CXR"))
             requestTasks("CXR connected")
+            retryPendingLaunch()
         }
     }
 
@@ -208,21 +223,83 @@ class HelperRuntime private constructor(context: Context) {
         selectedIndex: Int,
         onLaunchRequestSent: () -> Unit,
     ) {
+        val request = PendingLaunchRequest(
+            id = ++nextLaunchRequestId,
+            taskName = task.name,
+            selectedIndex = selectedIndex,
+            onLaunchRequestSent = onLaunchRequestSent,
+        )
+        pendingLaunch = request
+        attemptLaunchRequest(request, wakeOnFailure = true)
+        beginLaunchRetry(request)
+    }
+
+    private fun attemptLaunchRequest(
+        request: PendingLaunchRequest,
+        wakeOnFailure: Boolean,
+    ) {
         sendStatus(
             StatusMessage(
                 type = StatusType.LAUNCH_TASK,
-                taskName = task.name,
-                selectedIndex = selectedIndex,
+                taskName = request.taskName,
+                selectedIndex = request.selectedIndex,
                 message = "Launch requested",
             ),
             onNotSent = {
+                if (pendingLaunch?.id == request.id) {
+                    _state.value = _state.value.copy(
+                        status = "Waking phone to launch ${request.taskName}",
+                        lastLaunchSuccess = null,
+                    )
+                    if (wakeOnFailure) {
+                        requestPhoneWake("Launch task")
+                    }
+                }
+            },
+            onSent = {
+                if (pendingLaunch?.id == request.id) {
+                    clearPendingLaunch(request.id)
+                    request.onLaunchRequestSent()
+                }
+            },
+        )
+    }
+
+    private fun beginLaunchRetry(request: PendingLaunchRequest) {
+        launchRetryJob?.cancel()
+        launchRetryJob = scope.launch {
+            LAUNCH_RETRY_DELAYS_MS.forEachIndexed { index, delayMs ->
+                delay(delayMs)
+                val current = pendingLaunch ?: return@launch
+                if (current.id != request.id) return@launch
+                if (!_state.value.phoneConnected) {
+                    requestPhoneWake("Launch task")
+                } else if (index >= STALE_CONNECTED_RETRY_INDEX) {
+                    restartBridgeForStaleTaskList()
+                    requestPhoneWake("Stale launch retry")
+                }
+                attemptLaunchRequest(current, wakeOnFailure = false)
+            }
+            if (pendingLaunch?.id == request.id) {
                 _state.value = _state.value.copy(
                     status = "Phone link not connected",
                     lastLaunchSuccess = false,
                 )
-            },
-            onSent = onLaunchRequestSent,
-        )
+                clearPendingLaunch(request.id)
+            }
+        }
+    }
+
+    private fun retryPendingLaunch() {
+        val request = pendingLaunch ?: return
+        attemptLaunchRequest(request, wakeOnFailure = false)
+    }
+
+    private fun clearPendingLaunch(id: Long) {
+        if (pendingLaunch?.id != id) return
+        pendingLaunch = null
+        launchRetryJob?.cancel()
+        launchRetryJob = null
     }
 
     private fun moveMenuSelection(delta: Int) {
@@ -431,6 +508,14 @@ class HelperRuntime private constructor(context: Context) {
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 12_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
         private const val STALE_CONNECTED_RETRY_INDEX = 1
+        private val LAUNCH_RETRY_DELAYS_MS = longArrayOf(
+            1_000L,
+            2_500L,
+            5_000L,
+            9_000L,
+            15_000L,
+            25_000L,
+        )
         private val REQUEST_RETRY_DELAYS_MS = longArrayOf(
             1_500L,
             3_500L,
