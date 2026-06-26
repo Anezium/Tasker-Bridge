@@ -139,7 +139,7 @@ class BridgeRuntime private constructor(context: Context) {
         val wake = BleWakeServer.arm(appContext)
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
-            bluetoothServerActive = wake.active,
+            bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothPairingMode = false,
             bluetoothStatus = if (companionLinked) wake.status else "${wake.status}; companion link needed",
             lastStatus = if (companionLinked) wake.status else "Link glasses for reliable background wake.",
@@ -219,7 +219,7 @@ class BridgeRuntime private constructor(context: Context) {
         val wake = BleWakeServer.ensureHealthy(appContext)
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
-            bluetoothServerActive = wake.active,
+            bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothStatus = wake.status,
             lastStatus = if (wake.active) {
                 "BLE wake healthy."

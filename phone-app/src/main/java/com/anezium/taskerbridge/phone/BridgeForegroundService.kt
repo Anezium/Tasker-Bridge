@@ -271,6 +271,6 @@ class BridgeForegroundService : Service() {
 private fun PhoneUiState.notificationText(): String = when {
     bluetoothConnected -> "HUD connected, ${tasks.size} tasks ready"
     bridgeServiceActive -> "Opening HUD Bluetooth session"
-    bluetoothServerActive -> "BLE wake armed, waiting for HUD"
+    bluetoothServerActive -> bluetoothStatus.ifBlank { "BLE wake armed, waiting for HUD" }
     else -> "Tasker Bridge idle"
 }

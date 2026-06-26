@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.9-preview.5 - 2026-06-26
+
+### Preview Fix
+
+- Treat BLE wake as healthy only after advertising is confirmed, not merely after the GATT server exists.
+- Keep the bridge shown as armed while the foreground service is repairing BLE wake, but surface the real BLE status in the notification.
+- Make the watchdog re-check health after a repair attempt instead of assuming restart success.
+
 ## v0.2.9-preview.4 - 2026-06-26
 
 ### Preview Fix

@@ -110,7 +110,7 @@ object BleWakeServer {
         openGattServer(cleanContext, manager)
         startAdvertising(adapter)
         return BleWakeState(
-            active = gattServer != null,
+            active = gattServer != null && advertising,
             status = if (advertising) "BLE wake armed" else "BLE wake starting",
         )
     }
@@ -119,7 +119,8 @@ object BleWakeServer {
         val state = health(context)
         if (state.active || !isArmed(context)) return state
         stop()
-        return ensureStarted(context)
+        ensureStarted(context)
+        return health(context)
     }
 
     fun health(context: Context): BleWakeState {
