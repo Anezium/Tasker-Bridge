@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,6 +61,9 @@ class BluetoothBridgeClient(
     private var socket: BluetoothSocket? = null
 
     @Volatile
+    private var pendingSocket: BluetoothSocket? = null
+
+    @Volatile
     private var writer: BufferedWriter? = null
 
     @Volatile
@@ -77,10 +81,11 @@ class BluetoothBridgeClient(
     }
 
     fun stop() {
+        val job = acceptJob
+        acceptJob = null
+        closeSocket()
         scope.launch {
-            acceptJob?.cancelAndJoin()
-            acceptJob = null
-            closeSocket()
+            job?.cancelAndJoin()
             onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth stopped"))
         }
     }
@@ -99,12 +104,18 @@ class BluetoothBridgeClient(
     }
 
     private suspend fun connectLoop() {
-        while (acceptJob?.isActive == true) {
-            val connectedSocket = connectToPhone()
+        val loopJob = currentCoroutineContext()[Job]
+        while (connectLoopActive(loopJob)) {
+            val connectedSocket = connectToPhone(loopJob)
             if (connectedSocket == null) {
+                if (!connectLoopActive(loopJob)) break
                 recordConnectFailure()
                 delay(RECONNECT_DELAY_MS)
                 continue
+            }
+            if (!connectLoopActive(loopJob)) {
+                runCatching { connectedSocket.close() }
+                break
             }
             socket = connectedSocket
             val activeWriter = BufferedWriter(OutputStreamWriter(connectedSocket.outputStream, Charsets.UTF_8))
@@ -137,13 +148,13 @@ class BluetoothBridgeClient(
                 readPhone(reader)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                if (acceptJob?.isActive == true) {
+                if (connectLoopActive(loopJob)) {
                     Log.d(TAG, "Bluetooth phone disconnected", error)
                     onLog("Bluetooth phone disconnected.")
                 }
             }
             closeSocket()
-            if (acceptJob?.isActive == true) {
+            if (connectLoopActive(loopJob)) {
                 onState(BluetoothClientState(active = true, connected = false, status = "Looking for phone"))
                 delay(RECONNECT_DELAY_MS)
             }
@@ -151,7 +162,8 @@ class BluetoothBridgeClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToPhone(): BluetoothSocket? {
+    private fun connectToPhone(loopJob: Job?): BluetoothSocket? {
+        if (!connectLoopActive(loopJob)) return null
         val adapter = bluetoothAdapter()
         if (adapter == null) {
             onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth unavailable"))
@@ -178,6 +190,7 @@ class BluetoothBridgeClient(
 
         runCatching { adapter.cancelDiscovery() }
         for (device in candidates) {
+            if (!connectLoopActive(loopJob)) return null
             onState(
                 BluetoothClientState(
                     active = true,
@@ -189,13 +202,19 @@ class BluetoothBridgeClient(
                     },
                 ),
             )
-            val connected = runCatching {
-                device.createRfcommSocketToServiceRecord(serviceUuid).also { candidate ->
-                    candidate.connect()
-                }
-            }.getOrElse { error ->
+            var candidate: BluetoothSocket? = null
+            val connected = try {
+                if (!connectLoopActive(loopJob)) return null
+                candidate = device.createRfcommSocketToServiceRecord(serviceUuid)
+                pendingSocket = candidate
+                candidate.connect()
+                candidate
+            } catch (error: Throwable) {
                 Log.d(TAG, "Bluetooth connect failed for candidate phone", error)
+                runCatching { candidate?.close() }
                 null
+            } finally {
+                if (pendingSocket === candidate) pendingSocket = null
             }
             if (connected != null) return connected
         }
@@ -302,6 +321,9 @@ class BluetoothBridgeClient(
             trustedConnectFailures >= TRUSTED_FALLBACK_AFTER_FAILURES &&
             SystemClock.elapsedRealtime() >= nextFallbackSearchAtMs
 
+    private fun connectLoopActive(loopJob: Job?): Boolean =
+        acceptJob === loopJob && loopJob?.isActive == true
+
     @SuppressLint("MissingPermission")
     private fun android.bluetooth.BluetoothDevice?.safeName(): String =
         runCatching { this?.name.orEmpty() }.getOrDefault("")
@@ -315,6 +337,9 @@ class BluetoothBridgeClient(
             runCatching { writer?.close() }
             writer = null
         }
+        val pending = pendingSocket
+        pendingSocket = null
+        runCatching { pending?.close() }
         runCatching { socket?.close() }
         socket = null
     }

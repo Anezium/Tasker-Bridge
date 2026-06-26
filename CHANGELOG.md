@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.9-preview.8 - 2026-06-26
+
+### Preview Fix
+
+- Close any in-flight glasses RFCOMM connection attempt immediately when the HUD leaves the foreground.
+- Track and close the pending Bluetooth socket before waiting for the helper connect loop to finish, reducing the chance of hidden Bluetooth work after leaving Tasker Bridge.
+- Make helper shutdown idempotent so rapid HUD close/reopen cannot leave the runtime in a stale started state.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.4` reaches the glasses, then tap **Arm wake bridge**.
+- This keeps the preview.7 no-CXR-L runtime path and stale-phone fallback, but hardens the battery side of HUD shutdown.
+
 ## v0.2.9-preview.7 - 2026-06-26
 
 ### Preview Fix

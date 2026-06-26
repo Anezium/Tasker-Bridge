@@ -52,12 +52,14 @@ class HelperRuntime private constructor(context: Context) {
     }
 
     fun close() {
+        val wasStarted = started
+        started = false
         taskRequestRetryJob?.cancel()
         BleWakeClient.cancel()
+        if (!wasStarted) return
         scope.launch {
             bridge.send(StatusMessage(StatusType.READY, "Helper closing"))
             bridge.stop()
-            started = false
         }
     }
 
