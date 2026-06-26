@@ -29,6 +29,7 @@ class BridgeForegroundService : Service() {
     private var notificationJob: Job? = null
     private var lastNotificationText: String = ""
     private var idleStopRunnable: Runnable? = null
+    private var wakeWatchdogRunnable: Runnable? = null
     private var explicitStop = false
 
     override fun onCreate() {
@@ -55,6 +56,7 @@ class BridgeForegroundService : Service() {
                     intent.getStringExtra(EXTRA_START_REASON).orEmpty().ifBlank { "HUD wake" },
                 )
                 watchRuntimeState()
+                startWakeWatchdog()
                 scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
                 return START_STICKY
             }
@@ -64,6 +66,7 @@ class BridgeForegroundService : Service() {
                 runtime.startBackground()
                 startBridgeForeground(runtime.state.value)
                 watchRuntimeState()
+                startWakeWatchdog()
                 cancelIdleStop()
                 return START_STICKY
             }
@@ -74,6 +77,7 @@ class BridgeForegroundService : Service() {
     override fun onDestroy() {
         notificationJob?.cancel()
         cancelIdleStop()
+        cancelWakeWatchdog()
         if (!explicitStop) {
             runtime.stopBluetoothSession()
         }
@@ -167,7 +171,9 @@ class BridgeForegroundService : Service() {
             runtime.stopBluetoothSession()
             runtime.markServiceActive(false)
             if (BleWakeServer.isArmed(this)) {
+                runtime.refreshWakeHealth("session idle")
                 startBridgeForeground(runtime.state.value)
+                startWakeWatchdog()
             } else {
                 stopForegroundCompat()
                 stopSelf()
@@ -180,6 +186,31 @@ class BridgeForegroundService : Service() {
     private fun cancelIdleStop() {
         idleStopRunnable?.let(mainHandler::removeCallbacks)
         idleStopRunnable = null
+    }
+
+    private fun startWakeWatchdog() {
+        if (wakeWatchdogRunnable != null) return
+        wakeWatchdogRunnable = object : Runnable {
+            override fun run() {
+                if (explicitStop || !BleWakeServer.isArmed(this@BridgeForegroundService)) {
+                    wakeWatchdogRunnable = null
+                    return
+                }
+                val state = runtime.state.value
+                if (!state.bridgeServiceActive && !state.bluetoothConnected) {
+                    runtime.refreshWakeHealth()
+                    startBridgeForeground(runtime.state.value)
+                }
+                mainHandler.postDelayed(this, WAKE_WATCHDOG_INTERVAL_MS)
+            }
+        }.also { runnable ->
+            mainHandler.postDelayed(runnable, WAKE_WATCHDOG_INITIAL_DELAY_MS)
+        }
+    }
+
+    private fun cancelWakeWatchdog() {
+        wakeWatchdogRunnable?.let(mainHandler::removeCallbacks)
+        wakeWatchdogRunnable = null
     }
 
     private fun stopForegroundCompat() {
@@ -199,6 +230,8 @@ class BridgeForegroundService : Service() {
         private const val ACTION_STOP = "com.anezium.taskerbridge.phone.action.STOP_BRIDGE"
         private const val EXTRA_START_REASON = "com.anezium.taskerbridge.phone.extra.START_REASON"
         private const val SESSION_IDLE_TIMEOUT_MS = 90_000L
+        private const val WAKE_WATCHDOG_INITIAL_DELAY_MS = 20_000L
+        private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
 

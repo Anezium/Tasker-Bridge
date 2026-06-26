@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.4 - 2026-06-26
+
+### Preview Fix
+
+- Add a foreground-service watchdog that checks BLE wake health while the bridge is armed.
+- Detect missing GATT server, unconfirmed advertiser, advertiser failure, missing permission, and Bluetooth-off states.
+- Restart BLE wake automatically when the watchdog finds the idle wake path unhealthy.
+- Keep the watchdog out of the active RFCOMM session so task launch traffic is not interrupted.
+
+### Upgrade Notes
+
+- Install the new phone APK and tap **Arm wake bridge**.
+- Keep the Tasker Bridge notification running during the long-idle test.
+- The bundled glasses helper is still `0.2.6-preview.2`; reinstall HUD only if the helper is older.
+
 ## v0.2.9-preview.3 - 2026-06-26
 
 ### Preview Fix

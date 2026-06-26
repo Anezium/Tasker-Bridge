@@ -45,14 +45,19 @@ object BleWakeServer {
     @Volatile
     private var advertising = false
 
+    @Volatile
+    private var lastAdvertiseFailureCode: Int? = null
+
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             advertising = true
+            lastAdvertiseFailureCode = null
             Log.i(TAG, "BLE wake advertising started")
         }
 
         override fun onStartFailure(errorCode: Int) {
             advertising = false
+            lastAdvertiseFailureCode = errorCode
             Log.w(TAG, "BLE wake advertising failed code=$errorCode")
         }
     }
@@ -104,7 +109,47 @@ object BleWakeServer {
         }
         openGattServer(cleanContext, manager)
         startAdvertising(adapter)
-        return BleWakeState(active = gattServer != null, status = "BLE wake armed")
+        return BleWakeState(
+            active = gattServer != null,
+            status = if (advertising) "BLE wake armed" else "BLE wake starting",
+        )
+    }
+
+    fun ensureHealthy(context: Context): BleWakeState {
+        val state = health(context)
+        if (state.active || !isArmed(context)) return state
+        stop()
+        return ensureStarted(context)
+    }
+
+    fun health(context: Context): BleWakeState {
+        val cleanContext = context.applicationContext
+        appContext = cleanContext
+        if (!isArmed(cleanContext)) {
+            return BleWakeState(active = false, status = "BLE wake disabled")
+        }
+        if (!hasBlePermissions(cleanContext)) {
+            return BleWakeState(active = false, status = "Bluetooth wake permission missing")
+        }
+        val adapter = cleanContext.getSystemService(BluetoothManager::class.java)?.adapter
+        if (adapter == null || !adapter.isEnabled) {
+            return BleWakeState(active = false, status = "Bluetooth disabled")
+        }
+        if (gattServer == null) {
+            return BleWakeState(active = false, status = "BLE wake GATT missing")
+        }
+        if (!advertising) {
+            val failureCode = lastAdvertiseFailureCode
+            return BleWakeState(
+                active = false,
+                status = if (failureCode == null) {
+                    "BLE wake advertising not confirmed"
+                } else {
+                    "BLE wake advertising failed: $failureCode"
+                },
+            )
+        }
+        return BleWakeState(active = true, status = "BLE wake armed")
     }
 
     fun disarm(context: Context): BleWakeState {
@@ -175,6 +220,7 @@ object BleWakeServer {
             Log.w(TAG, "stop BLE wake advertising failed: ${it.message}")
         }
         advertising = false
+        lastAdvertiseFailureCode = null
         runCatching {
             if (hasConnectPermission(context)) {
                 gattServer?.close()

@@ -211,6 +211,25 @@ class BridgeRuntime private constructor(context: Context) {
         refreshTasker(sendToGlasses = false)
     }
 
+    fun refreshWakeHealth(reason: String = "wake watchdog"): BleWakeState {
+        val companionLinked = CompanionDeviceCoordinator.hasAssociation(appContext)
+        if (companionLinked) {
+            CompanionDeviceCoordinator.startObserving(appContext)
+        }
+        val wake = BleWakeServer.ensureHealthy(appContext)
+        _state.value = _state.value.copy(
+            companionLinked = companionLinked,
+            bluetoothServerActive = wake.active,
+            bluetoothStatus = wake.status,
+            lastStatus = if (wake.active) {
+                "BLE wake healthy."
+            } else {
+                "$reason: ${wake.status}"
+            },
+        )
+        return wake
+    }
+
     fun stopBluetoothSession() {
         bluetooth.stop()
         val wake = if (BleWakeServer.isArmed(appContext)) {
