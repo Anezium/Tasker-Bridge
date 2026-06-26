@@ -34,6 +34,7 @@ class BridgeForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeService = this
         createNotificationChannel()
         runtime = BridgeRuntime.get(applicationContext)
     }
@@ -41,37 +42,19 @@ class BridgeForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                explicitStop = true
-                BridgeWakeScheduler.cancel(this)
-                runtime.stopBackground()
-                runtime.markServiceActive(false)
-                stopForegroundCompat()
-                stopSelf()
+                handleStop()
                 return START_NOT_STICKY
             }
 
             ACTION_START -> {
-                BridgeDiagnostics.record(this, "Foreground session start requested")
-                runtime.markServiceActive(true)
-                startBridgeForeground(runtime.state.value)
-                runtime.startBluetoothSession(
+                handleSessionStart(
                     intent.getStringExtra(EXTRA_START_REASON).orEmpty().ifBlank { "HUD wake" },
                 )
-                watchRuntimeState()
-                startWakeWatchdog()
-                BridgeWakeScheduler.schedule(this)
-                scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
                 return START_REDELIVER_INTENT
             }
 
             ACTION_ARM_WAKE, null -> {
-                runtime.markServiceActive(false)
-                runtime.startBackground()
-                startBridgeForeground(runtime.state.value)
-                watchRuntimeState()
-                startWakeWatchdog()
-                BridgeWakeScheduler.schedule(this)
-                cancelIdleStop()
+                handleArmWake()
                 return START_STICKY
             }
         }
@@ -79,6 +62,9 @@ class BridgeForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeService === this) {
+            activeService = null
+        }
         notificationJob?.cancel()
         cancelIdleStop()
         cancelWakeWatchdog()
@@ -105,6 +91,41 @@ class BridgeForegroundService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun handleStop() {
+        explicitStop = true
+        if (activeService === this) {
+            activeService = null
+        }
+        BridgeWakeScheduler.cancel(this)
+        runtime.stopBackground()
+        runtime.markServiceActive(false)
+        stopForegroundCompat()
+        stopSelf()
+    }
+
+    private fun handleSessionStart(reason: String) {
+        explicitStop = false
+        BridgeDiagnostics.record(this, "Foreground session start requested: $reason")
+        runtime.markServiceActive(true)
+        startBridgeForeground(runtime.state.value)
+        runtime.startBluetoothSession(reason)
+        watchRuntimeState()
+        startWakeWatchdog()
+        BridgeWakeScheduler.schedule(this)
+        scheduleIdleStop(SESSION_IDLE_TIMEOUT_MS)
+    }
+
+    private fun handleArmWake() {
+        explicitStop = false
+        runtime.markServiceActive(false)
+        runtime.startBackground()
+        startBridgeForeground(runtime.state.value)
+        watchRuntimeState()
+        startWakeWatchdog()
+        BridgeWakeScheduler.schedule(this)
+        cancelIdleStop()
+    }
 
     private fun watchRuntimeState() {
         if (notificationJob?.isActive == true) return
@@ -252,6 +273,15 @@ class BridgeForegroundService : Service() {
         private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        private const val RUNTIME_FALLBACK_MAX_CONNECTED_CHECKS = 6
+
+        @Volatile
+        private var activeService: BridgeForegroundService? = null
+
+        @Volatile
+        private var runtimeFallbackGeneration: Long = 0L
+
+        private val fallbackHandler by lazy { Handler(Looper.getMainLooper()) }
 
         fun start(context: Context) {
             armWake(context)
@@ -259,6 +289,16 @@ class BridgeForegroundService : Service() {
 
         fun armWake(context: Context): Boolean {
             BridgeWakeScheduler.schedule(context)
+            val service = activeService
+            if (service != null) {
+                service.mainHandler.post {
+                    if (activeService === service) {
+                        service.handleArmWake()
+                    }
+                }
+                BridgeDiagnostics.record(context, "Foreground wake delivered to active service")
+                return true
+            }
             return runCatching {
                 ContextCompat.startForegroundService(
                     context,
@@ -268,16 +308,27 @@ class BridgeForegroundService : Service() {
                 BridgeDiagnostics.record(context, "Foreground wake service armed")
                 true
             }.getOrElse { error ->
+                postRuntimeArmFallback(context)
                 BridgeDiagnostics.recordSessionStartFailure(
                     context,
-                    "Arm wake service failed: ${error.javaClass.simpleName}",
+                    "Arm wake service failed: ${error.javaClass.simpleName}; runtime fallback",
                 )
-                false
+                true
             }
         }
 
         fun startSession(context: Context, reason: String = "BLE wake"): Boolean {
             BridgeWakeScheduler.schedule(context)
+            val service = activeService
+            if (service != null) {
+                service.mainHandler.post {
+                    if (activeService === service) {
+                        service.handleSessionStart(reason)
+                    }
+                }
+                BridgeDiagnostics.record(context, "Foreground session delivered to active service: $reason")
+                return true
+            }
             return runCatching {
                 ContextCompat.startForegroundService(
                     context,
@@ -288,17 +339,75 @@ class BridgeForegroundService : Service() {
                 BridgeDiagnostics.record(context, "Foreground session start posted: $reason")
                 true
             }.getOrElse { error ->
+                postRuntimeSessionFallback(context, reason)
                 BridgeDiagnostics.recordSessionStartFailure(
                     context,
-                    "Session start failed: ${error.javaClass.simpleName}",
+                    "Session start failed: ${error.javaClass.simpleName}; runtime fallback",
                 )
-                false
+                true
             }
         }
 
         fun stop(context: Context) {
             context.startService(Intent(context, BridgeForegroundService::class.java).setAction(ACTION_STOP))
         }
+
+        private fun postRuntimeArmFallback(context: Context) {
+            val appContext = context.applicationContext
+            fallbackHandler.post {
+                val runtime = BridgeRuntime.get(appContext)
+                runtime.start()
+                runtime.startBackground()
+                BridgeWakeScheduler.schedule(appContext)
+                BridgeDiagnostics.record(appContext, "Runtime wake fallback armed")
+            }
+        }
+
+        private fun postRuntimeSessionFallback(context: Context, reason: String) {
+            val appContext = context.applicationContext
+            val generation = nextRuntimeFallbackGeneration()
+            fallbackHandler.post {
+                val runtime = BridgeRuntime.get(appContext)
+                runtime.start()
+                runtime.markServiceActive(true)
+                runtime.startBluetoothSession("$reason (runtime fallback)")
+                BridgeDiagnostics.record(appContext, "Runtime session fallback started: $reason")
+                scheduleRuntimeFallbackCleanup(appContext, runtime, generation, connectedChecks = 0)
+            }
+        }
+
+        private fun scheduleRuntimeFallbackCleanup(
+            context: Context,
+            runtime: BridgeRuntime,
+            generation: Long,
+            connectedChecks: Int,
+        ) {
+            fallbackHandler.postDelayed(
+                {
+                    if (generation != runtimeFallbackGeneration) return@postDelayed
+                    val state = runtime.state.value
+                    if (!state.bridgeServiceActive) return@postDelayed
+                    if (state.bluetoothConnected && connectedChecks < RUNTIME_FALLBACK_MAX_CONNECTED_CHECKS) {
+                        scheduleRuntimeFallbackCleanup(context, runtime, generation, connectedChecks + 1)
+                        return@postDelayed
+                    }
+                    runtime.stopBluetoothSession()
+                    runtime.markServiceActive(false)
+                    if (BleWakeServer.isArmed(context)) {
+                        runtime.refreshWakeHealth("runtime fallback idle")
+                        BridgeWakeScheduler.schedule(context)
+                    }
+                    BridgeDiagnostics.record(context, "Runtime session fallback cleaned up")
+                },
+                SESSION_IDLE_TIMEOUT_MS,
+            )
+        }
+
+        private fun nextRuntimeFallbackGeneration(): Long =
+            synchronized(this) {
+                runtimeFallbackGeneration += 1L
+                runtimeFallbackGeneration
+            }
     }
 }
 
