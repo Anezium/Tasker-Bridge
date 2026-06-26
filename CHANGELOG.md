@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.9-preview.11 - 2026-06-26
+
+### Preview Fix
+
+- Request Bluetooth scan/connect/advertise runtime permissions inside the glasses HUD so the preview.10 wake beacon can actually run on Android 12+ firmwares.
+- Show the glasses-side wake beacon status in the HUD bridge status line when it is sent, unavailable, or blocked by permission.
+- Do not treat the phone BLE wake paths as all-or-nothing: the new HUD-beacon scan can stay armed even if the old phone-advertising wake path is unavailable.
+- Recreate the phone RFCOMM listener whenever a HUD wake/session starts, so a stale long-idle `accept()` socket cannot block reconnect after several hours.
+- Tie the phone RFCOMM accept/read loop to its current job generation so old listener cleanup cannot close a fresh listener.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.7` reaches the glasses, then tap **Arm wake bridge**.
+- If the glasses show a Bluetooth permission prompt after the helper update, allow it once; otherwise the HUD beacon fallback cannot wake the phone.
+- This keeps the no-CXR-L runtime path. CXR-L remains setup-only.
+
 ## v0.2.9-preview.10 - 2026-06-26
 
 ### Preview Fix

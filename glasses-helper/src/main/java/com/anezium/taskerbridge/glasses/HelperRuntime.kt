@@ -313,7 +313,11 @@ class HelperRuntime private constructor(context: Context) {
     }
 
     private fun requestPhoneWake(reason: String) {
-        BleWakeAdvertiser.pulse(appContext)
+        BleWakeAdvertiser.pulse(appContext) { message ->
+            if (started) {
+                _state.value = _state.value.copy(bridgeState = message)
+            }
+        }
         val now = SystemClock.elapsedRealtime()
         if (wakeRequestInFlight || now - lastWakeRequestAtMs < WAKE_REQUEST_MIN_INTERVAL_MS) {
             requestTasks(reason)

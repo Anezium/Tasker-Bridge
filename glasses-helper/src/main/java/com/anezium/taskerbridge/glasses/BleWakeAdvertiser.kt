@@ -32,27 +32,38 @@ object BleWakeAdvertiser {
 
     private var timeoutRunnable: Runnable? = null
 
-    fun pulse(context: Context) {
+    fun pulse(
+        context: Context,
+        onStatus: (String) -> Unit = {},
+    ) {
         main.post {
             stopActive()
             val appContext = context.applicationContext
             if (!hasAdvertisePermission(appContext)) {
-                Log.w(TAG, "HUD wake beacon permission missing")
+                val message = "HUD wake beacon permission missing"
+                Log.w(TAG, message)
+                onStatus(message)
                 return@post
             }
             val adapter = appContext.getSystemService(BluetoothManager::class.java)?.adapter
             val advertiser = adapter?.bluetoothLeAdvertiser
             if (adapter == null || !adapter.isEnabled || advertiser == null) {
-                Log.w(TAG, "HUD wake beacon unavailable")
+                val message = "HUD wake beacon unavailable"
+                Log.w(TAG, message)
+                onStatus(message)
                 return@post
             }
             val callback = object : AdvertiseCallback() {
                 override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                    Log.i(TAG, "HUD wake beacon advertising")
+                    val message = "HUD wake beacon sent"
+                    Log.i(TAG, message)
+                    onStatus(message)
                 }
 
                 override fun onStartFailure(errorCode: Int) {
-                    Log.w(TAG, "HUD wake beacon failed code=$errorCode")
+                    val message = "HUD wake beacon failed: $errorCode"
+                    Log.w(TAG, message)
+                    onStatus(message)
                     stopActive()
                 }
             }
@@ -70,7 +81,9 @@ object BleWakeAdvertiser {
                 advertiser.startAdvertising(settings, data, callback)
                 scheduleStop()
             }.onFailure { error ->
-                Log.w(TAG, "HUD wake beacon start failed: ${error.message}")
+                val message = "HUD wake beacon start failed"
+                Log.w(TAG, "$message: ${error.message}")
+                onStatus(message)
                 stopActive()
             }
         }

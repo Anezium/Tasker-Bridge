@@ -1,5 +1,8 @@
 package com.anezium.taskerbridge.glasses
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -8,6 +11,8 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -61,7 +66,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         runtime = HelperRuntime.get(applicationContext)
-        runtime.start()
+        val startDeferred = requestBluetoothPermissionsIfNeeded()
+        if (!startDeferred) {
+            runtime.start()
+        }
         setContent {
             val state by runtime.state.collectAsState()
             BackHandler {
@@ -101,6 +109,17 @@ class MainActivity : ComponentActivity() {
         }
         if (::runtime.isInitialized) {
             runtime.resume()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == BLUETOOTH_PERMISSIONS_REQUEST && ::runtime.isInitialized) {
+            runtime.start()
         }
     }
 
@@ -178,8 +197,27 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun requestBluetoothPermissionsIfNeeded(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val missing = arrayOf(
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+        ).filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) return false
+        ActivityCompat.requestPermissions(
+            this,
+            missing.toTypedArray(),
+            BLUETOOTH_PERMISSIONS_REQUEST,
+        )
+        return true
+    }
+
     companion object {
         private const val TAG = "TaskerBridge-HUD"
+        private const val BLUETOOTH_PERMISSIONS_REQUEST = 82
         private const val KEYCODE_ROKID_CLICK = 202
         private const val KEYCODE_ROKID_SWIPE_FORWARD = 183
         private const val KEYCODE_ROKID_SWIPE_BACK = 184

@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,21 +72,33 @@ class BluetoothBridgeServer(
         connectJob = scope.launch { acceptLoop() }
     }
 
+    fun restart() {
+        val oldJob = connectJob
+        connectJob = null
+        closeSocket()
+        closeServer()
+        connectJob = scope.launch { acceptLoop() }
+        scope.launch { oldJob?.cancelAndJoin() }
+    }
+
     fun stop() {
+        val job = connectJob
+        connectJob = null
+        closeSocket()
+        closeServer()
         scope.launch {
-            connectJob?.cancelAndJoin()
-            connectJob = null
-            closeSocket()
-            closeServer()
-            onState(
-                BluetoothServerState(
-                    active = false,
-                    connected = false,
-                    paired = hasTrustedGlasses(),
-                    pairingMode = false,
-                    status = "Bluetooth stopped",
-                ),
-            )
+            job?.cancelAndJoin()
+            if (connectJob == null) {
+                onState(
+                    BluetoothServerState(
+                        active = false,
+                        connected = false,
+                        paired = hasTrustedGlasses(),
+                        pairingMode = false,
+                        status = "Bluetooth stopped",
+                    ),
+                )
+            }
         }
     }
 
@@ -120,11 +133,17 @@ class BluetoothBridgeServer(
     }
 
     private suspend fun acceptLoop() {
-        while (connectJob?.isActive == true) {
-            val acceptedSocket = waitForGlasses()
+        val loopJob = currentCoroutineContext()[Job]
+        while (serverLoopActive(loopJob)) {
+            val acceptedSocket = waitForGlasses(loopJob)
             if (acceptedSocket == null) {
+                if (!serverLoopActive(loopJob)) break
                 delay(SERVER_RETRY_DELAY_MS)
                 continue
+            }
+            if (!serverLoopActive(loopJob)) {
+                runCatching { acceptedSocket.close() }
+                break
             }
             socket = acceptedSocket
             val activeWriter = BufferedWriter(OutputStreamWriter(acceptedSocket.outputStream, Charsets.UTF_8))
@@ -151,16 +170,16 @@ class BluetoothBridgeServer(
             )
             onLog("Bluetooth HUD connected.")
             try {
-                readGlasses(reader)
+                readGlasses(reader, loopJob)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                if (connectJob?.isActive == true) {
+                if (serverLoopActive(loopJob)) {
                     Log.d(TAG, "Bluetooth HUD disconnected", error)
                     onLog("Bluetooth HUD disconnected.")
                 }
             }
             closeSocket()
-            if (connectJob?.isActive == true) {
+            if (serverLoopActive(loopJob)) {
                 onState(
                     BluetoothServerState(
                         active = true,
@@ -175,7 +194,7 @@ class BluetoothBridgeServer(
     }
 
     @SuppressLint("MissingPermission")
-    private fun waitForGlasses(): BluetoothSocket? {
+    private fun waitForGlasses(loopJob: Job?): BluetoothSocket? {
         val adapter = bluetoothAdapter()
         if (adapter == null) {
             onState(
@@ -217,12 +236,15 @@ class BluetoothBridgeServer(
             return null
         }
 
+        var listener: BluetoothServerSocket? = null
         return runCatching {
             closeServer()
-            serverSocket = adapter.listenUsingRfcommWithServiceRecord(
+            listener = adapter.listenUsingRfcommWithServiceRecord(
                 Protocol.BLUETOOTH_SERVICE_NAME,
                 serviceUuid,
             )
+            val activeListener = listener ?: return@runCatching null
+            serverSocket = activeListener
             val paired = hasTrustedGlasses()
             onState(
                 BluetoothServerState(
@@ -234,8 +256,12 @@ class BluetoothBridgeServer(
                 ),
             )
             onLog("Bluetooth phone server listening.")
-            val accepted = serverSocket?.accept() ?: return@runCatching null
-            closeServer()
+            val accepted = activeListener.accept() ?: return@runCatching null
+            closeServer(activeListener)
+            if (!serverLoopActive(loopJob)) {
+                runCatching { accepted.close() }
+                return@runCatching null
+            }
             if (!isTrustedGlasses(accepted)) {
                 runCatching { accepted.close() }
                 onLog("Rejected unpaired Bluetooth HUD.")
@@ -243,8 +269,8 @@ class BluetoothBridgeServer(
             }
             accepted
         }.getOrElse { error ->
-            closeServer()
-            if (connectJob?.isActive == true) {
+            closeServer(listener)
+            if (serverLoopActive(loopJob)) {
                 Log.d(TAG, "Bluetooth listener failed", error)
                 onError("Bluetooth listener failed.", error)
             }
@@ -282,9 +308,12 @@ class BluetoothBridgeServer(
         }
     }
 
-    private fun readGlasses(reader: BufferedReader) {
+    private fun readGlasses(
+        reader: BufferedReader,
+        loopJob: Job?,
+    ) {
         reader.use {
-            while (connectJob?.isActive == true) {
+            while (serverLoopActive(loopJob)) {
                 val raw = it.readLine() ?: break
                 if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) {
                     onError("Bluetooth message was too large.", null)
@@ -355,9 +384,19 @@ class BluetoothBridgeServer(
             .apply()
     }
 
-    private fun closeServer() {
-        runCatching { serverSocket?.close() }
-        serverSocket = null
+    private fun serverLoopActive(loopJob: Job?): Boolean =
+        connectJob === loopJob && loopJob?.isActive == true
+
+    private fun closeServer(target: BluetoothServerSocket? = null) {
+        val activeServer = serverSocket
+        if (target != null && activeServer !== target) {
+            runCatching { target.close() }
+            return
+        }
+        runCatching { activeServer?.close() }
+        if (serverSocket === activeServer) {
+            serverSocket = null
+        }
     }
 
     private fun closeSocket() {

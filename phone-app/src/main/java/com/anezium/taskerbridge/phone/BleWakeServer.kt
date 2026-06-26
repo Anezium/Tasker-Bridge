@@ -118,7 +118,7 @@ object BleWakeServer {
             stop()
             return BleWakeState(active = false, status = "BLE wake disabled")
         }
-        if (!hasBlePermissions(cleanContext)) {
+        if (!hasAnyWakePermission(cleanContext)) {
             return BleWakeState(active = false, status = "Bluetooth wake permission missing")
         }
         val manager = cleanContext.getSystemService(BluetoothManager::class.java)
@@ -126,9 +126,17 @@ object BleWakeServer {
         if (adapter == null || !adapter.isEnabled) {
             return BleWakeState(active = false, status = "Bluetooth disabled")
         }
-        openGattServer(cleanContext, manager)
-        startAdvertising(adapter)
-        startHudBeaconScan(cleanContext, adapter)
+        if (hasAdvertisePermission(cleanContext) && hasConnectPermission(cleanContext)) {
+            openGattServer(cleanContext, manager)
+            startAdvertising(adapter)
+        } else {
+            Log.w(TAG, "BLE wake advertising permission missing")
+        }
+        if (hasScanPermission(cleanContext)) {
+            startHudBeaconScan(cleanContext, adapter)
+        } else {
+            Log.w(TAG, "BLE HUD beacon scan permission missing")
+        }
         return health(cleanContext)
     }
 
@@ -146,7 +154,7 @@ object BleWakeServer {
         if (!isArmed(cleanContext)) {
             return BleWakeState(active = false, status = "BLE wake disabled")
         }
-        if (!hasBlePermissions(cleanContext)) {
+        if (!hasAnyWakePermission(cleanContext)) {
             return BleWakeState(active = false, status = "Bluetooth wake permission missing")
         }
         val adapter = cleanContext.getSystemService(BluetoothManager::class.java)?.adapter
@@ -356,8 +364,8 @@ object BleWakeServer {
         return BridgeForegroundService.startSession(context)
     }
 
-    private fun hasBlePermissions(context: Context): Boolean =
-        hasAdvertisePermission(context) && hasConnectPermission(context) && hasScanPermission(context)
+    private fun hasAnyWakePermission(context: Context): Boolean =
+        hasScanPermission(context) || (hasAdvertisePermission(context) && hasConnectPermission(context))
 
     private fun hasAdvertisePermission(context: Context?): Boolean =
         context != null &&
