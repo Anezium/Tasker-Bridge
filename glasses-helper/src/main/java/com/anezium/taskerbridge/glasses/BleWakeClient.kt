@@ -44,6 +44,12 @@ object BleWakeClient {
     @Volatile
     private var activeContext: Context? = null
 
+    @Volatile
+    private var activeOperationId: Long = 0L
+
+    @Volatile
+    private var activeGattOperationId: Long = 0L
+
     private var timeoutRunnable: Runnable? = null
 
     fun requestWake(
@@ -52,42 +58,51 @@ object BleWakeClient {
     ) {
         main.post {
             cancelActive(notify = false)
+            val operationId = activeOperationId + 1
+            activeOperationId = operationId
             activeCallback = callback
             val appContext = context.applicationContext
             if (!hasBlePermissions(appContext)) {
-                finish(false, "Bluetooth wake permission missing")
+                finish(operationId, false, "Bluetooth wake permission missing")
                 return@post
             }
             val adapter = appContext.getSystemService(BluetoothManager::class.java)?.adapter
             if (adapter == null || !adapter.isEnabled) {
-                finish(false, "Bluetooth is off")
+                finish(operationId, false, "Bluetooth is off")
                 return@post
             }
             val scanner = adapter.bluetoothLeScanner
             if (scanner == null) {
-                finish(false, "BLE scanner unavailable")
+                finish(operationId, false, "BLE scanner unavailable")
                 return@post
             }
             activeContext = appContext
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                    if (!isActiveOperation(operationId)) return
                     val device = result?.device ?: return
                     stopScan(appContext)
-                    connect(appContext, device)
+                    connect(appContext, device, operationId)
                 }
 
                 override fun onScanFailed(errorCode: Int) {
-                    finish(false, "BLE wake scan failed: $errorCode")
+                    finish(operationId, false, "BLE wake scan failed: $errorCode")
                 }
             }
             activeScanCallback = scanCallback
-            scheduleTimeout()
+            scheduleTimeout(operationId)
             startScan(scanner, scanCallback)
         }
     }
 
     fun cancel() {
-        main.post { cancelActive(notify = false) }
+        val cancelledOperationId = activeOperationId + 1
+        activeOperationId = cancelledOperationId
+        runOnMain {
+            if (activeOperationId == cancelledOperationId) {
+                cancelActive(notify = false)
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -121,7 +136,13 @@ object BleWakeClient {
     }
 
     @SuppressLint("MissingPermission")
-    private fun connect(context: Context, device: BluetoothDevice) {
+    private fun connect(
+        context: Context,
+        device: BluetoothDevice,
+        operationId: Long,
+    ) {
+        if (!isActiveOperation(operationId)) return
+        activeGattOperationId = operationId
         activeGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } else {
@@ -132,28 +153,30 @@ object BleWakeClient {
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            val operationId = activeTokenFor(gatt) ?: return
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finish(false, "BLE wake connect failed")
+                finish(operationId, false, "BLE wake connect failed")
                 return
             }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> gatt.discoverServices()
-                BluetoothProfile.STATE_DISCONNECTED -> finish(false, "BLE wake disconnected")
+                BluetoothProfile.STATE_DISCONNECTED -> finish(operationId, false, "BLE wake disconnected")
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            val operationId = activeTokenFor(gatt) ?: return
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finish(false, "BLE wake service discovery failed")
+                finish(operationId, false, "BLE wake service discovery failed")
                 return
             }
             val service = gatt.getService(serviceUuid)
             val characteristic = service?.getCharacteristic(characteristicUuid)
             if (service == null || characteristic == null) {
-                finish(false, "BLE wake service not found")
+                finish(operationId, false, "BLE wake service not found")
                 return
             }
-            writeWakeRequest(gatt, characteristic)
+            writeWakeRequest(gatt, characteristic, operationId)
         }
 
         override fun onCharacteristicWrite(
@@ -162,7 +185,9 @@ object BleWakeClient {
             status: Int,
         ) {
             if (characteristic.uuid != characteristicUuid) return
+            val operationId = activeTokenFor(gatt) ?: return
             finish(
+                operationId = operationId,
                 ok = status == BluetoothGatt.GATT_SUCCESS,
                 message = if (status == BluetoothGatt.GATT_SUCCESS) {
                     "Phone waking..."
@@ -177,7 +202,9 @@ object BleWakeClient {
     private fun writeWakeRequest(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
+        operationId: Long,
     ) {
+        if (!isActiveOperation(operationId)) return
         val payload = JSONObject()
             .put("version", Protocol.PROTOCOL_VERSION)
             .put("type", Protocol.BLE_WAKE_TYPE_TASKS)
@@ -199,20 +226,21 @@ object BleWakeClient {
             }
         }
         if (!started) {
-            finish(false, "BLE wake write did not start")
+            finish(operationId, false, "BLE wake write did not start")
         }
     }
 
-    private fun scheduleTimeout() {
+    private fun scheduleTimeout(operationId: Long) {
         val runnable = Runnable {
-            finish(false, "Phone wake timed out")
+            finish(operationId, false, "Phone wake timed out")
         }
         timeoutRunnable = runnable
         main.postDelayed(runnable, WAKE_TIMEOUT_MS)
     }
 
-    private fun finish(ok: Boolean, message: String) {
+    private fun finish(operationId: Long, ok: Boolean, message: String) {
         main.post {
+            if (!isActiveOperation(operationId)) return@post
             val callback = activeCallback
             cancelActive(notify = false)
             callback?.invoke(ok, message)
@@ -241,9 +269,29 @@ object BleWakeClient {
             Log.w(TAG, "close BLE wake GATT failed: ${it.message}")
         }
         activeGatt = null
+        activeGattOperationId = 0L
         val callback = activeCallback
         activeCallback = null
         if (notify) callback?.invoke(false, "BLE wake cancelled")
+    }
+
+    private fun activeTokenFor(gatt: BluetoothGatt): Long? {
+        if (activeGatt !== gatt) {
+            runCatching { gatt.close() }
+            return null
+        }
+        return activeGattOperationId.takeIf(::isActiveOperation)
+    }
+
+    private fun isActiveOperation(operationId: Long): Boolean =
+        operationId != 0L && activeOperationId == operationId
+
+    private inline fun runOnMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            main.post { block() }
+        }
     }
 
     private fun hasBlePermissions(context: Context): Boolean =

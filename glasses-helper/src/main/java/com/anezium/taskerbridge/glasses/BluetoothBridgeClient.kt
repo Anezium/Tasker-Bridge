@@ -86,7 +86,9 @@ class BluetoothBridgeClient(
         closeSocket()
         scope.launch {
             job?.cancelAndJoin()
-            onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth stopped"))
+            if (acceptJob == null) {
+                onState(BluetoothClientState(active = false, connected = false, status = "Bluetooth stopped"))
+            }
         }
     }
 
@@ -145,7 +147,7 @@ class BluetoothBridgeClient(
             )
             onLog("Bluetooth phone connected.")
             try {
-                readPhone(reader)
+                readPhone(reader, loopJob)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 if (connectLoopActive(loopJob)) {
@@ -248,9 +250,12 @@ class BluetoothBridgeClient(
         }
     }
 
-    private fun readPhone(reader: BufferedReader) {
+    private fun readPhone(
+        reader: BufferedReader,
+        loopJob: Job?,
+    ) {
         reader.use {
-            while (acceptJob?.isActive == true) {
+            while (connectLoopActive(loopJob)) {
                 val raw = it.readLine() ?: break
                 if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) {
                     onError("Bluetooth message was too large.", null)

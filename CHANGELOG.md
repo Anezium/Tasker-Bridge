@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.9 - 2026-06-26
+
+### Preview Fix
+
+- Stop the HUD Bluetooth bridge immediately during helper close instead of waiting behind a best-effort "closing" status send.
+- Ignore stale stop/status work from an older HUD session after a new Bluetooth session has already started.
+- Tie the glasses RFCOMM read loop and BLE wake callbacks to their current operation so old close/reopen callbacks cannot cancel a fresh wake or reconnect.
+- Reset local wake/request throttles on helper close so the next HUD open can wake the phone immediately without leaving hidden Bluetooth work running.
+
+### Upgrade Notes
+
+- Install the new phone APK, tap **Install HUD** so bundled helper `0.2.6-preview.5` reaches the glasses, then tap **Arm wake bridge**.
+- This remains the no-CXR-L runtime path: CXR-L is only for install/update or phone-triggered HUD open; normal task loading/launching uses BLE wake plus Bluetooth RFCOMM.
+- During long-idle testing, the HUD should still stop its glasses-side Bluetooth work as soon as it leaves the foreground.
+
 ## v0.2.9-preview.8 - 2026-06-26
 
 ### Preview Fix
