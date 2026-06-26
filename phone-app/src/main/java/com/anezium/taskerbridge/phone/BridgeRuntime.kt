@@ -31,6 +31,8 @@ class BridgeRuntime private constructor(context: Context) {
     private var lastAuthorizationRequestAtMs = 0L
     private var lastHudTaskRequestAtMs = 0L
     private var lastBluetoothConnectedAtMs = 0L
+    private var lastHudPingAtMs = 0L
+    private var nextHudPingId = 0L
     private var lastTaskListSentAtMs = 0L
     private var lastTaskerSnapshot: TaskerSnapshot? = null
     private val recentLaunchResults = LinkedHashMap<String, ControlMessage.LaunchResult>()
@@ -265,6 +267,9 @@ class BridgeRuntime private constructor(context: Context) {
         val wake = BleWakeServer.ensureFresh(appContext, WAKE_FORCE_REARM_INTERVAL_MS)
         val staleConnectionClosed = bluetooth.closeStaleConnection(RFCOMM_STALE_CONNECTION_MS)
         val rfcommRefreshed = bluetooth.ensureFreshIdleListener(RFCOMM_FORCE_REARM_INTERVAL_MS)
+        if (!staleConnectionClosed && _state.value.hudTransportConnected()) {
+            pingHudConnection()
+        }
         BridgeWakeScheduler.schedule(appContext)
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
@@ -564,8 +569,25 @@ class BridgeRuntime private constructor(context: Context) {
                 _state.value = _state.value.copy(lastStatus = "Ignored unknown HUD message.")
             }
             StatusType.PONG -> {
-                _state.value = _state.value.copy(lastStatus = "HUD pong: ${message.message}")
+                BridgeDiagnostics.record(appContext, "HUD pong received")
+                _state.value = _state.value.copy(wakeDiagnostics = wakeDiagnosticsSummary())
             }
+        }
+    }
+
+    private fun pingHudConnection() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastHudPingAtMs < HUD_PING_INTERVAL_MS) return
+        lastHudPingAtMs = now
+        val nonce = "hud-${now}-${++nextHudPingId}"
+        scope.launch {
+            val ping = ControlMessage.Ping(nonce)
+            val sent = bluetooth.send(ping) || cxr.sendControl(ping)
+            BridgeDiagnostics.record(
+                appContext,
+                if (sent) "HUD ping sent" else "HUD ping could not send",
+            )
+            _state.value = _state.value.copy(wakeDiagnostics = wakeDiagnosticsSummary())
         }
     }
 
@@ -689,6 +711,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
         private const val RFCOMM_FORCE_REARM_INTERVAL_MS = 5 * 60 * 1000L
         private const val RFCOMM_STALE_CONNECTION_MS = 4 * 60 * 1000L
+        private const val HUD_PING_INTERVAL_MS = 30_000L
         private const val MAX_RECENT_LAUNCH_RESULTS = 12
 
         @Volatile
@@ -704,6 +727,9 @@ class BridgeRuntime private constructor(context: Context) {
 
 private fun Int.coerceInTaskBounds(tasks: List<*>): Int =
     if (tasks.isEmpty()) 0 else coerceIn(0, tasks.lastIndex)
+
+private fun PhoneUiState.hudTransportConnected(): Boolean =
+    bluetoothConnected || (cxrConnected && glassBtConnected)
 
 private fun StatusMessage.helperRuntimeVersionLabel(): String {
     val name = appVersion.ifBlank { "legacy/unknown" }

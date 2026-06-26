@@ -152,15 +152,7 @@ class BluetoothBridgeServer(
         BridgeDiagnostics.record(appContext, "RFCOMM stale connection closed after $idleLabel")
         onLog("Bluetooth stale HUD connection closed.")
         closeSocket()
-        onState(
-            BluetoothServerState(
-                active = connectJob?.isActive == true,
-                connected = false,
-                paired = hasTrustedGlasses(),
-                pairingMode = connectJob?.isActive == true && !hasTrustedGlasses(),
-                status = "Stale HUD connection closed",
-            ),
-        )
+        onState(disconnectedState("Stale HUD connection closed"))
         return true
     }
 
@@ -244,6 +236,7 @@ class BluetoothBridgeServer(
         }.getOrElse { error ->
             onError("Bluetooth send failed.", error)
             closeSocket()
+            onState(disconnectedState("Bluetooth send failed"))
             false
         }
     }
@@ -701,6 +694,15 @@ class BluetoothBridgeServer(
             activeWriter.flush()
         }
     }
+
+    private fun disconnectedState(status: String): BluetoothServerState =
+        BluetoothServerState(
+            active = connectJob?.isActive == true,
+            connected = false,
+            paired = hasTrustedGlasses(),
+            pairingMode = connectJob?.isActive == true && !hasTrustedGlasses(),
+            status = status,
+        )
 
     private fun durationLabel(durationMs: Long): String {
         val seconds = durationMs.coerceAtLeast(0L) / 1000L
