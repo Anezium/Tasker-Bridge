@@ -153,6 +153,7 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(activity)
             _state.value = _state.value.copy(companionLinked = true)
             startBackground()
+            BridgeForegroundService.armWake(activity)
             return
         }
         if (companionRequestInFlight) return
@@ -173,6 +174,7 @@ class BridgeRuntime private constructor(context: Context) {
                 )
                 if (linked) {
                     startBackground()
+                    BridgeForegroundService.armWake(appContext)
                 }
             }
         }
@@ -253,6 +255,7 @@ class BridgeRuntime private constructor(context: Context) {
     fun launchHudFromUi(activity: Activity) {
         start()
         startBackground()
+        BridgeForegroundService.armWake(activity)
         cxrSetup.begin(CxrSetupAction.LAUNCH)
         beginCxrSetup(activity)
     }
@@ -283,6 +286,7 @@ class BridgeRuntime private constructor(context: Context) {
         )
         if (linked) {
             startBackground()
+            BridgeForegroundService.armWake(appContext)
         }
     }
 

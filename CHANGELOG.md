@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.9-preview.3 - 2026-06-26
+
+### Preview Fix
+
+- Keep the BLE wake advertiser alive inside a lightweight foreground `connectedDevice` service after the user arms the wake bridge.
+- Do not keep the RFCOMM task channel open in that idle service; RFCOMM still opens only after the HUD sends `wake_tasks`.
+- After a HUD session idles/disconnects, return to BLE-wake-only foreground mode instead of stopping the service and risking process cleanup.
+- Re-arm the foreground wake service from companion presence and autostart receiver callbacks.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Tap **Link glasses for wake** / **Arm wake bridge** once and leave the Tasker Bridge notification running.
+- `Install HUD` is only needed if the glasses helper is older than bundled helper `0.2.6-preview.2`.
+- Test the old failure case by leaving the phone idle for a few hours, then opening the HUD from the glasses.
+
 ## v0.2.9-preview.2 - 2026-06-26
 
 ### Preview Fix

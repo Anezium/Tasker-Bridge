@@ -37,6 +37,7 @@ class BridgeCompanionService : CompanionDeviceService() {
         Log.i(TAG, "glasses present: $source")
         if (BleWakeServer.isArmed(this)) {
             BleWakeServer.ensureStarted(this)
+            BridgeForegroundService.armWake(this)
         }
     }
 

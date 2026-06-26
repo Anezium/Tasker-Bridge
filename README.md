@@ -44,7 +44,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes and upgrade details.
 - Uses a low-power BLE wake signal from the HUD, then a short Bluetooth RFCOMM session for task lists and launch commands.
 - Links the glasses with Android Companion Device Manager so background wake is allowed while the glasses are nearby.
 - Pairs by the Tasker Bridge Bluetooth service endpoint, not by the device name.
-- Runs a foreground `connectedDevice` session only while the HUD is actively connecting.
+- Keeps a lightweight foreground `connectedDevice` wake service alive for BLE only, then opens RFCOMM only while the HUD is actively connecting.
 - Refreshes Tasker on HUD open/resume instead of polling forever.
 - Responds cache-first, then refreshes Tasker and only pushes an update if the task list changed.
 
@@ -102,7 +102,7 @@ Glasses helper
 
 Phone app
   -> Android Companion Device link keeps the glasses eligible for background wake
-  -> BLE GATT wake server stays armed after the user enables the bridge
+  -> foreground wake service keeps the BLE GATT wake server alive
   -> foreground connectedDevice service opens a short RFCOMM session after wake
   -> sends Tasker run broadcast
   -> returns LAUNCH_RESULT
@@ -117,7 +117,7 @@ Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOM
 
 ## Battery Behavior
 
-The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start a permanent foreground service by itself; use **Link glasses for wake** / **Arm wake bridge** when you want glasses commands available. While armed, the phone exposes a low-power BLE GATT wake endpoint and registers Android companion-device presence observation. When the HUD opens, it writes a small `wake_tasks` request, the phone opens a foreground RFCOMM session, sends/receives Tasker messages, then drops the session after the HUD disconnects or stays idle. If the first wake attempt races Android's re-arm, the HUD retries wake while it is still waiting for the phone.
+The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the task channel by itself; use **Link glasses for wake** / **Arm wake bridge** when you want glasses commands available. While armed, the phone keeps a low-power foreground wake service alive so the BLE GATT wake endpoint is not lost when Android cleans background processes. That idle service does not keep the RFCOMM task channel open. When the HUD opens, it writes a small `wake_tasks` request, the phone opens a short RFCOMM session, sends/receives Tasker messages, then drops back to BLE-wake-only mode after the HUD disconnects or stays idle. If the first wake attempt races Android's re-arm, the HUD retries wake while it is still waiting for the phone.
 
 When the glasses HUD is open in the foreground, it keeps the glasses display awake intentionally so the menu remains usable. When the HUD leaves the foreground, it stops the glasses-side Bluetooth listener.
 
