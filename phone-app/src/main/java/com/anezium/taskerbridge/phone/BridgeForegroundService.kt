@@ -78,7 +78,7 @@ class BridgeForegroundService : Service() {
         notificationJob?.cancel()
         cancelIdleStop()
         cancelWakeWatchdog()
-        if (!explicitStop) {
+        if (!explicitStop && !BleWakeServer.isArmed(this)) {
             runtime.stopBluetoothSession()
         }
         runtime.markServiceActive(false)

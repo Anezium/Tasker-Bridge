@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.6 - 2026-06-26
+
+### Preview Fix
+
+- Keep the passive RFCOMM server ready while the foreground wake bridge is armed.
+- BLE wake remains active and watched, but the HUD no longer depends on BLE success before it can connect to the phone.
+- The phone still does not connect to the glasses or keep CXR-L alive while idle; it only listens for HUD connections.
+- After an idle HUD session, return to the armed passive listener instead of closing the Bluetooth server.
+
+### Upgrade Notes
+
+- Install the new phone APK and tap **Arm wake bridge**.
+- Keep the Tasker Bridge notification running during long-idle testing.
+- Reinstall HUD only if the helper is older than bundled helper `0.2.6-preview.2`.
+
 ## v0.2.9-preview.5 - 2026-06-26
 
 ### Preview Fix

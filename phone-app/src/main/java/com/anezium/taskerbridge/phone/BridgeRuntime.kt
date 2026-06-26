@@ -137,6 +137,7 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.arm(appContext)
+        bluetooth.start()
         _state.value = _state.value.copy(
             companionLinked = companionLinked,
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
@@ -231,7 +232,9 @@ class BridgeRuntime private constructor(context: Context) {
     }
 
     fun stopBluetoothSession() {
-        bluetooth.stop()
+        if (!BleWakeServer.isArmed(appContext)) {
+            bluetooth.stop()
+        }
         val wake = if (BleWakeServer.isArmed(appContext)) {
             BleWakeServer.ensureStarted(appContext)
         } else {
@@ -432,6 +435,7 @@ class BridgeRuntime private constructor(context: Context) {
             else -> state.status
         }
         _state.value = _state.value.copy(
+            bridgeServiceActive = state.connected || (_state.value.bridgeServiceActive && state.active),
             bluetoothServerActive = active,
             bluetoothConnected = state.connected,
             bluetoothPaired = state.paired,

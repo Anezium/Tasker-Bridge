@@ -41,10 +41,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes and upgrade details.
 - Launches the selected Tasker task from the glasses.
 - Keeps Tasker access and execution on the Android phone.
 - Uses Global Hi Rokid CXR-L only to install and launch the glasses helper.
-- Uses a low-power BLE wake signal from the HUD, then a short Bluetooth RFCOMM session for task lists and launch commands.
+- Uses a low-power BLE wake signal plus a passive Bluetooth RFCOMM listener for HUD task lists and launch commands.
 - Links the glasses with Android Companion Device Manager so background wake is allowed while the glasses are nearby.
 - Pairs by the Tasker Bridge Bluetooth service endpoint, not by the device name.
-- Keeps a lightweight foreground `connectedDevice` wake service alive for BLE only, then opens RFCOMM only while the HUD is actively connecting.
+- Keeps a lightweight foreground `connectedDevice` service alive with BLE wake and a passive RFCOMM listener ready for the HUD.
 - Refreshes Tasker on HUD open/resume instead of polling forever.
 - Responds cache-first, then refreshes Tasker and only pushes an update if the task list changed.
 
@@ -102,8 +102,8 @@ Glasses helper
 
 Phone app
   -> Android Companion Device link keeps the glasses eligible for background wake
-  -> foreground wake service keeps the BLE GATT wake server alive
-  -> foreground connectedDevice service opens a short RFCOMM session after wake
+  -> foreground wake service keeps BLE wake and passive RFCOMM listener alive
+  -> HUD connects over RFCOMM when it is open
   -> sends Tasker run broadcast
   -> returns LAUNCH_RESULT
 ```
@@ -117,7 +117,7 @@ Tasker Bridge uses newline-delimited JSON messages over a stable Bluetooth RFCOM
 
 ## Battery Behavior
 
-The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start the task channel by itself; use **Link glasses for wake** / **Arm wake bridge** when you want glasses commands available. While armed, the phone keeps a low-power foreground wake service alive so the BLE GATT wake endpoint is not lost when Android cleans background processes. That idle service does not keep the RFCOMM task channel open. When the HUD opens, it writes a small `wake_tasks` request, the phone opens a short RFCOMM session, sends/receives Tasker messages, then drops back to BLE-wake-only mode after the HUD disconnects or stays idle. The foreground wake service periodically checks that the BLE GATT server and advertiser are still healthy and restarts them if needed. If the first wake attempt races Android's re-arm, the HUD retries wake while it is still waiting for the phone.
+The bridge is designed to sit idle. It does not hold a phone wake lock, does not refresh Tasker on a timer, and does not keep a CXR-L custom app session active. Opening the phone app does not start CXR-L runtime by itself; use **Link glasses for wake** / **Arm wake bridge** when you want glasses commands available. While armed, the phone keeps a low-power foreground service alive so the BLE GATT wake endpoint and passive RFCOMM listener are not lost when Android cleans background processes. The phone only listens; it does not connect to the glasses while the HUD is closed. When the HUD opens, it can connect directly over RFCOMM and also writes a small `wake_tasks` BLE request as a fallback signal. After the HUD disconnects, the phone returns to armed listener mode. The foreground wake service periodically checks that the BLE GATT server and advertiser are still healthy and restarts them if needed.
 
 When the glasses HUD is open in the foreground, it keeps the glasses display awake intentionally so the menu remains usable. When the HUD leaves the foreground, it stops the glasses-side Bluetooth listener.
 
