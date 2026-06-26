@@ -36,6 +36,7 @@ class BridgeRuntime private constructor(context: Context) {
     private var lastTaskListSentAtMs = 0L
     private var lastTaskerSnapshot: TaskerSnapshot? = null
     private val recentLaunchResults = LinkedHashMap<String, ControlMessage.LaunchResult>()
+    private val inFlightLaunchRequestIds = mutableSetOf<String>()
     private val cxrSetup = CxrSetupCoordinator(CONNECT_COOLDOWN_MS)
 
     private val bluetooth = BluetoothBridgeServer(
@@ -434,20 +435,30 @@ class BridgeRuntime private constructor(context: Context) {
                 sendLaunchResultToGlasses(cachedResult)
                 return@launch
             }
-            val result = tasker.runTask(taskName)
-            _state.value = _state.value.copy(
-                lastStatus = result.message,
-                error = if (result.success) "" else result.message,
-            )
-            val resultMessage = ControlMessage.LaunchResult(
-                taskName = result.taskName,
-                success = result.success,
-                message = result.message,
-                requestId = requestId,
-            )
-            rememberLaunchResult(resultMessage)
-            sendLaunchResultToGlasses(resultMessage)
-            refreshTasker(sendToGlasses = false)
+            if (requestId.isNotBlank() && !inFlightLaunchRequestIds.add(requestId)) {
+                _state.value = _state.value.copy(lastStatus = "HUD launch already in progress.")
+                return@launch
+            }
+            try {
+                val result = tasker.runTask(taskName)
+                _state.value = _state.value.copy(
+                    lastStatus = result.message,
+                    error = if (result.success) "" else result.message,
+                )
+                val resultMessage = ControlMessage.LaunchResult(
+                    taskName = result.taskName,
+                    success = result.success,
+                    message = result.message,
+                    requestId = requestId,
+                )
+                rememberLaunchResult(resultMessage)
+                sendLaunchResultToGlasses(resultMessage)
+                refreshTasker(sendToGlasses = false)
+            } finally {
+                if (requestId.isNotBlank()) {
+                    inFlightLaunchRequestIds.remove(requestId)
+                }
+            }
         }
     }
 
@@ -628,9 +639,10 @@ class BridgeRuntime private constructor(context: Context) {
         )
         val sent = bluetooth.send(message) || cxr.sendControl(message)
         if (!sent) {
-            BridgeDiagnostics.record(appContext, "Task list send failed: no HUD writer")
+            bluetooth.restart()
+            BridgeDiagnostics.record(appContext, "Task list send failed; Bluetooth session restarted")
             _state.value = _state.value.copy(
-                lastStatus = "Waiting for HUD connection.",
+                lastStatus = "Waiting for HUD connection; Bluetooth restarted.",
                 wakeDiagnostics = wakeDiagnosticsSummary(),
             )
         } else {
@@ -642,7 +654,12 @@ class BridgeRuntime private constructor(context: Context) {
     private suspend fun sendLaunchResultToGlasses(message: ControlMessage.LaunchResult) {
         val delivered = bluetooth.send(message) || cxr.sendControl(message)
         if (!delivered) {
-            _state.value = _state.value.copy(lastStatus = "Waiting for HUD connection.")
+            bluetooth.restart()
+            BridgeDiagnostics.record(appContext, "Launch result send failed; Bluetooth session restarted")
+            _state.value = _state.value.copy(
+                lastStatus = "Waiting for HUD connection; Bluetooth restarted.",
+                wakeDiagnostics = wakeDiagnosticsSummary(),
+            )
         }
     }
 

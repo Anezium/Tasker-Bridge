@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.29 - 2026-06-26
+
+### Preview Fix
+
+- Keep HUD-visible task-list and launch retries alive after the initial retry ramp, with a slow two-minute cadence until the user leaves Tasker Bridge.
+- Restart the phone Bluetooth session when a task list or launch acknowledgement cannot be delivered, instead of leaving the HUD stuck on a dead writer.
+- Deduplicate in-flight launch request IDs on the phone so a slow acknowledgement cannot run the same Tasker task twice during extended HUD retries.
+- Preserve the battery model: the new helper retry loop runs only while the Tasker Bridge HUD is foreground/visible and is cancelled by the existing close/onStop path.
+
+### Upgrade Notes
+
+- Install the new phone APK, then tap **Install HUD** so bundled helper `0.2.6-preview.16` reaches the glasses.
+- Tap **Arm wake bridge** again before long-idle testing.
+- This is still not a CXR-L keepalive; runtime CXR remains visible-HUD fallback only.
+
 ## v0.2.9-preview.23 - 2026-06-26
 
 ### Preview Fix

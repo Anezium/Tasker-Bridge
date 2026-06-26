@@ -283,12 +283,15 @@ class HelperRuntime private constructor(context: Context) {
                 }
                 attemptLaunchRequest(current, wakeOnFailure = false)
             }
-            if (pendingLaunch?.id == request.id) {
+            while (started && pendingLaunch?.id == request.id) {
                 _state.value = _state.value.copy(
-                    status = "Phone link not connected",
-                    lastLaunchSuccess = false,
+                    status = "Still waiting for phone link",
+                    lastLaunchSuccess = null,
                 )
-                clearPendingLaunch(request.id)
+                restartBridgeForStaleTaskList()
+                requestPhoneWake("Still waiting to launch")
+                attemptLaunchRequest(request, wakeOnFailure = false)
+                delay(SUSTAINED_LAUNCH_RETRY_INTERVAL_MS)
             }
         }
     }
@@ -446,6 +449,12 @@ class HelperRuntime private constructor(context: Context) {
                 }
                 sendTaskRequest("Need task list")
             }
+            while (started && !taskListReceived) {
+                restartBridgeForStaleTaskList()
+                requestPhoneWake("Still waiting for tasks")
+                sendTaskRequest("Still waiting for tasks")
+                delay(SUSTAINED_TASK_RETRY_INTERVAL_MS)
+            }
         }
     }
 
@@ -528,6 +537,8 @@ class HelperRuntime private constructor(context: Context) {
         private const val TASK_REQUEST_MIN_INTERVAL_MS = 1_000L
         private const val WAKE_REQUEST_MIN_INTERVAL_MS = 12_000L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 12_000L
+        private const val SUSTAINED_TASK_RETRY_INTERVAL_MS = 120_000L
+        private const val SUSTAINED_LAUNCH_RETRY_INTERVAL_MS = 120_000L
         private const val FRESH_TASK_LIST_WINDOW_MS = 5_000L
         private const val STALE_CONNECTED_RETRY_INDEX = 1
         private val LAUNCH_RETRY_DELAYS_MS = longArrayOf(
