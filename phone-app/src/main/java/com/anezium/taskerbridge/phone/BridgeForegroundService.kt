@@ -270,7 +270,7 @@ class BridgeForegroundService : Service() {
         private const val WAKE_WATCHDOG_INTERVAL_MS = 60_000L
         private const val FOREGROUND_TYPES =
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        private const val RUNTIME_FALLBACK_START_GRACE_MS = 1_500L
+        private const val RUNTIME_FALLBACK_START_GRACE_MS = 3_000L
         private const val RUNTIME_FALLBACK_MAX_CONNECTED_CHECKS = 6
 
         @Volatile
@@ -278,6 +278,9 @@ class BridgeForegroundService : Service() {
 
         @Volatile
         private var runtimeFallbackGeneration: Long = 0L
+
+        @Volatile
+        private var sessionStartGeneration: Long = 0L
 
         private val fallbackHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -317,6 +320,7 @@ class BridgeForegroundService : Service() {
 
         fun startSession(context: Context, reason: String = "BLE wake"): Boolean {
             BridgeWakeScheduler.schedule(context)
+            val generation = nextSessionStartGeneration()
             val service = activeService
             if (service != null) {
                 service.mainHandler.post {
@@ -325,6 +329,7 @@ class BridgeForegroundService : Service() {
                     }
                 }
                 BridgeDiagnostics.record(context, "Foreground session delivered to active service: $reason")
+                scheduleSessionStartGrace(context, reason, generation)
                 return true
             }
             return runCatching {
@@ -335,7 +340,7 @@ class BridgeForegroundService : Service() {
                         .putExtra(EXTRA_START_REASON, reason),
                 )
                 BridgeDiagnostics.record(context, "Foreground session start posted: $reason")
-                scheduleRuntimeSessionFallbackIfNeeded(context, reason)
+                scheduleSessionStartGrace(context, reason, generation)
                 true
             }.getOrElse { error ->
                 postRuntimeSessionFallback(context, reason)
@@ -347,17 +352,36 @@ class BridgeForegroundService : Service() {
             }
         }
 
-        private fun scheduleRuntimeSessionFallbackIfNeeded(context: Context, reason: String) {
+        private fun scheduleSessionStartGrace(
+            context: Context,
+            reason: String,
+            generation: Long,
+        ) {
             val appContext = context.applicationContext
             fallbackHandler.postDelayed(
                 {
+                    if (generation != sessionStartGeneration) return@postDelayed
                     val runtime = BridgeRuntime.get(appContext)
                     val state = runtime.state.value
-                    if (activeService != null && (state.bridgeServiceActive || state.bluetoothConnected)) {
+                    if (state.hudTransportConnected()) {
                         return@postDelayed
                     }
-                    BridgeDiagnostics.record(appContext, "Foreground session grace expired; runtime fallback starting")
-                    postRuntimeSessionFallback(appContext, "$reason (delayed runtime fallback)")
+                    val service = activeService
+                    if (service != null) {
+                        BridgeDiagnostics.record(appContext, "Foreground session grace expired; service session refresh")
+                        service.mainHandler.post {
+                            if (
+                                generation == sessionStartGeneration &&
+                                activeService === service &&
+                                !runtime.state.value.hudTransportConnected()
+                            ) {
+                                service.handleSessionStart("$reason (grace refresh)")
+                            }
+                        }
+                    } else {
+                        BridgeDiagnostics.record(appContext, "Foreground session grace expired; runtime fallback starting")
+                        postRuntimeSessionFallback(appContext, "$reason (delayed runtime fallback)")
+                    }
                 },
                 RUNTIME_FALLBACK_START_GRACE_MS,
             )
@@ -424,6 +448,12 @@ class BridgeForegroundService : Service() {
                 runtimeFallbackGeneration
             }
 
+        private fun nextSessionStartGeneration(): Long =
+            synchronized(this) {
+                sessionStartGeneration += 1L
+                sessionStartGeneration
+            }
+
         private inline fun runFallbackOnMain(crossinline block: () -> Unit) {
             if (Looper.myLooper() == Looper.getMainLooper()) {
                 block()
@@ -440,3 +470,6 @@ private fun PhoneUiState.notificationText(): String = when {
     bluetoothServerActive -> bluetoothStatus.ifBlank { "BLE wake armed, waiting for HUD" }
     else -> "Tasker Bridge idle"
 }
+
+private fun PhoneUiState.hudTransportConnected(): Boolean =
+    bluetoothConnected || (cxrConnected && glassBtConnected)

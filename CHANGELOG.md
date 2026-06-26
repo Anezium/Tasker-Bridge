@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.36 - 2026-06-26
+
+### Preview Fix
+
+- Make the post-wake grace check require a real HUD transport connection, not just an active foreground service flag.
+- If the phone service is alive but no Bluetooth/CXR HUD transport is connected shortly after a HUD wake, refresh the HUD session immediately instead of waiting for the slower watchdog.
+- Keep the fix phone-only: bundled helper remains unchanged and there is still no glasses idle keepalive.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper remains `0.2.6-preview.19`; reinstall HUD only if the glasses are not already running that helper.
+- Tap **Arm wake bridge** once after install, then run the same several-hours idle test from the glasses.
+
 ## v0.2.9-preview.35 - 2026-06-26
 
 ### Preview Fix
