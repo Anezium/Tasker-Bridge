@@ -263,6 +263,7 @@ class BridgeRuntime private constructor(context: Context) {
             CompanionDeviceCoordinator.startObserving(appContext)
         }
         val wake = BleWakeServer.ensureFresh(appContext, WAKE_FORCE_REARM_INTERVAL_MS)
+        val staleConnectionClosed = bluetooth.closeStaleConnection(RFCOMM_STALE_CONNECTION_MS)
         val rfcommRefreshed = bluetooth.ensureFreshIdleListener(RFCOMM_FORCE_REARM_INTERVAL_MS)
         BridgeWakeScheduler.schedule(appContext)
         _state.value = _state.value.copy(
@@ -270,11 +271,15 @@ class BridgeRuntime private constructor(context: Context) {
             bluetoothServerActive = wake.active || BleWakeServer.isArmed(appContext),
             bluetoothStatus = if (rfcommRefreshed) {
                 "${wake.status}; RFCOMM refreshed"
+            } else if (staleConnectionClosed) {
+                "${wake.status}; stale RFCOMM closed"
             } else {
                 wake.status
             },
             wakeDiagnostics = wakeDiagnosticsSummary(),
-            lastStatus = if (wake.active) {
+            lastStatus = if (staleConnectionClosed) {
+                "Stale HUD Bluetooth connection closed."
+            } else if (wake.active) {
                 "BLE wake healthy."
             } else {
                 "$reason: ${wake.status}"
@@ -683,6 +688,7 @@ class BridgeRuntime private constructor(context: Context) {
         private const val FRESH_BLUETOOTH_CONNECTION_MS = 10_000L
         private const val WAKE_FORCE_REARM_INTERVAL_MS = 10 * 60 * 1000L
         private const val RFCOMM_FORCE_REARM_INTERVAL_MS = 5 * 60 * 1000L
+        private const val RFCOMM_STALE_CONNECTION_MS = 4 * 60 * 1000L
         private const val MAX_RECENT_LAUNCH_RESULTS = 12
 
         @Volatile

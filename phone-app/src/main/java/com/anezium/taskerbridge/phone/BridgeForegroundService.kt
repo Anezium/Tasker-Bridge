@@ -235,11 +235,8 @@ class BridgeForegroundService : Service() {
                     wakeWatchdogRunnable = null
                     return
                 }
-                val state = runtime.state.value
-                if (!state.bridgeServiceActive && !state.bluetoothConnected) {
-                    runtime.refreshWakeHealth()
-                    startBridgeForeground(runtime.state.value)
-                }
+                runtime.refreshWakeHealth()
+                startBridgeForeground(runtime.state.value)
                 mainHandler.postDelayed(this, WAKE_WATCHDOG_INTERVAL_MS)
             }
         }.also { runnable ->

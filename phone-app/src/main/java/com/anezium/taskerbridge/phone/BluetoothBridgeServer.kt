@@ -80,6 +80,12 @@ class BluetoothBridgeServer(
     @Volatile
     private var lastListenerRefreshAtMs: Long = 0L
 
+    @Volatile
+    private var lastConnectionOpenedAtMs: Long = 0L
+
+    @Volatile
+    private var lastInboundAtMs: Long = 0L
+
     fun start() {
         if (connectJob?.isActive == true) return
         lastListenerRefreshAtMs = SystemClock.elapsedRealtime()
@@ -137,23 +143,46 @@ class BluetoothBridgeServer(
         return false
     }
 
+    fun closeStaleConnection(maxIdleMs: Long): Boolean {
+        if (socket == null) return false
+        val now = SystemClock.elapsedRealtime()
+        val lastInbound = lastInboundAtMs.takeIf { it > 0L } ?: lastConnectionOpenedAtMs
+        if (lastInbound <= 0L || now - lastInbound < maxIdleMs) return false
+        val idleLabel = durationLabel(now - lastInbound)
+        BridgeDiagnostics.record(appContext, "RFCOMM stale connection closed after $idleLabel")
+        onLog("Bluetooth stale HUD connection closed.")
+        closeSocket()
+        onState(
+            BluetoothServerState(
+                active = connectJob?.isActive == true,
+                connected = false,
+                paired = hasTrustedGlasses(),
+                pairingMode = connectJob?.isActive == true && !hasTrustedGlasses(),
+                status = "Stale HUD connection closed",
+            ),
+        )
+        return true
+    }
+
     fun listenerSummary(): String {
         val last = lastListenerRefreshAtMs
         if (last == 0L) return "rfcomm=never"
         val ageSeconds = ((SystemClock.elapsedRealtime() - last).coerceAtLeast(0L)) / 1000L
-        val minutes = ageSeconds / 60L
-        val seconds = ageSeconds % 60L
-        val age = if (minutes > 0L) {
-            "${minutes}m${seconds}s"
-        } else {
-            "${seconds}s"
-        }
+        val age = durationLabel(ageSeconds * 1000L)
         val mode = when {
             socket != null -> "connected"
             connectJob?.isActive == true -> "listening"
             else -> "stopped"
         }
-        return "rfcomm=$mode ${age} ago"
+        val inbound = if (socket != null) {
+            val inboundAge = lastInboundAtMs.takeIf { it > 0L }
+                ?.let { " inbound=${durationLabel(SystemClock.elapsedRealtime() - it)}" }
+                .orEmpty()
+            inboundAge
+        } else {
+            ""
+        }
+        return "rfcomm=$mode ${age} ago$inbound"
     }
 
     fun stop() {
@@ -493,6 +522,7 @@ class BluetoothBridgeServer(
         val result = runCatching {
             val raw = reader.readLine() ?: return@runCatching false
             if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) return@runCatching false
+            lastInboundAtMs = SystemClock.elapsedRealtime()
             val hello = JsonProtocol.decodeStatus(raw)
             if (hello.type != StatusType.HELLO
                 || hello.protocolVersion != Protocol.PROTOCOL_VERSION
@@ -526,6 +556,7 @@ class BluetoothBridgeServer(
         reader.use {
             while (active()) {
                 val raw = it.readLine() ?: break
+                lastInboundAtMs = SystemClock.elapsedRealtime()
                 if (raw.length > Protocol.MAX_WIRE_MESSAGE_CHARS) {
                     onError("Bluetooth message was too large.", null)
                     continue
@@ -606,6 +637,9 @@ class BluetoothBridgeServer(
             if (socket != null) {
                 false
             } else {
+                val now = SystemClock.elapsedRealtime()
+                lastConnectionOpenedAtMs = now
+                lastInboundAtMs = now
                 socket = candidate
                 true
             }
@@ -623,6 +657,8 @@ class BluetoothBridgeServer(
             }
             runCatching { target.close() }
             socket = null
+            lastConnectionOpenedAtMs = 0L
+            lastInboundAtMs = 0L
         }
     }
 
@@ -647,6 +683,8 @@ class BluetoothBridgeServer(
             closePendingSocket()
             runCatching { socket?.close() }
             socket = null
+            lastConnectionOpenedAtMs = 0L
+            lastInboundAtMs = 0L
         }
     }
 
@@ -661,6 +699,17 @@ class BluetoothBridgeServer(
             activeWriter.write(raw)
             activeWriter.newLine()
             activeWriter.flush()
+        }
+    }
+
+    private fun durationLabel(durationMs: Long): String {
+        val seconds = durationMs.coerceAtLeast(0L) / 1000L
+        val minutes = seconds / 60L
+        val remainderSeconds = seconds % 60L
+        return if (minutes > 0L) {
+            "${minutes}m${remainderSeconds}s"
+        } else {
+            "${remainderSeconds}s"
         }
     }
 
