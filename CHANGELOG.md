@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9-preview.34 - 2026-06-26
+
+### Preview Fix
+
+- Hold a short phone-side partial wake lock when a glasses HUD wake arrives, giving the phone CPU enough time to start the HUD task session, RFCOMM listener, and runtime fallback after deep idle.
+- Keep the BLE wake broadcast alive briefly with `goAsync()` after an accepted HUD beacon, reducing the chance that Android drops the process immediately after delivering the wake scan result.
+- Leave the glasses battery model unchanged: no new background work on the glasses, no idle CXR keepalive, and the visible-HUD beacon behavior remains the preview.33 helper behavior.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper remains `0.2.6-preview.19`; reinstall HUD only if the glasses are not already running that helper.
+- Tap **Arm wake bridge** once after install, then run the same several-hours idle test from the glasses.
+
 ## v0.2.9-preview.33 - 2026-06-26
 
 ### Preview Fix

@@ -24,6 +24,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -69,6 +70,9 @@ object BleWakeServer {
 
     @Volatile
     private var lastWakeRebuildAtMs: Long = 0L
+
+    @Volatile
+    private var phoneWakeLock: PowerManager.WakeLock? = null
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -253,6 +257,7 @@ object BleWakeServer {
         if (!duplicate) {
             lastHudBeaconWakeAtMs = now
         }
+        holdPhoneAwake(cleanContext, "HUD beacon")
         val started = BridgeForegroundService.startSession(
             cleanContext,
             if (duplicate) "HUD BLE beacon refresh" else "HUD BLE beacon",
@@ -418,7 +423,26 @@ object BleWakeServer {
         if (json.optString("type") != Protocol.BLE_WAKE_TYPE_TASKS) return false
         Log.i(TAG, "BLE task wake received")
         BridgeDiagnostics.recordWake(context, "BLE task wake write received")
+        holdPhoneAwake(context, "BLE task wake write")
         return BridgeForegroundService.startSession(context)
+    }
+
+    private fun holdPhoneAwake(context: Context, reason: String) {
+        val appContext = context.applicationContext
+        val powerManager = appContext.getSystemService(PowerManager::class.java) ?: return
+        runCatching {
+            val wakeLock = phoneWakeLock ?: powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                PHONE_WAKE_LOCK_TAG,
+            ).apply {
+                setReferenceCounted(false)
+                phoneWakeLock = this
+            }
+            wakeLock.acquire(PHONE_WAKE_HOLD_MS)
+            BridgeDiagnostics.record(appContext, "Phone wake held for $reason")
+        }.onFailure {
+            Log.w(TAG, "phone wake hold failed: ${it.message}")
+        }
     }
 
     private fun hasAnyWakePermission(context: Context): Boolean =
@@ -494,4 +518,6 @@ object BleWakeServer {
     private const val SCAN_START_SUCCESS = 0
     private const val WAKE_SCAN_REQUEST_CODE = 72_411
     private const val HUD_BEACON_WAKE_DEBOUNCE_MS = 5_000L
+    private const val PHONE_WAKE_HOLD_MS = 45_000L
+    private const val PHONE_WAKE_LOCK_TAG = "TaskerBridge:HudWake"
 }

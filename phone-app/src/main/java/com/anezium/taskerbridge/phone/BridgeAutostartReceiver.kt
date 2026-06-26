@@ -5,15 +5,25 @@ import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 class BridgeAutostartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
         if (BleWakeServer.isWakeScanIntent(intent)) {
-            if (BleWakeServer.handleWakeScanIntent(context, intent)) {
+            val pendingResult = goAsync()
+            val accepted = runCatching {
+                BleWakeServer.handleWakeScanIntent(context, intent)
+            }.getOrElse { error ->
+                Log.w(TAG, "HUD beacon wake handling failed: ${error.message}")
+                false
+            }
+            if (accepted) {
                 Log.i(TAG, "HUD beacon wake accepted")
             }
+            finishPendingResult(pendingResult, if (accepted) HUD_WAKE_RECEIVER_HOLD_MS else 0L)
             return
         }
         if (BridgeWakeScheduler.isRearmIntent(intent)) {
@@ -50,5 +60,21 @@ class BridgeAutostartReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "TaskerBridge-Autostart"
+        private const val HUD_WAKE_RECEIVER_HOLD_MS = 4_000L
+        private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+        private fun finishPendingResult(
+            pendingResult: BroadcastReceiver.PendingResult,
+            delayMs: Long,
+        ) {
+            if (delayMs <= 0L) {
+                runCatching { pendingResult.finish() }
+                return
+            }
+            mainHandler.postDelayed(
+                { runCatching { pendingResult.finish() } },
+                delayMs,
+            )
+        }
     }
 }
