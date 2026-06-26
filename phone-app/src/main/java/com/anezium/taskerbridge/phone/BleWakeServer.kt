@@ -249,15 +249,21 @@ object BleWakeServer {
         Log.i(TAG, "HUD BLE beacon received count=${results.size}")
         BridgeDiagnostics.recordWake(cleanContext, "HUD BLE beacon received count=${results.size}")
         val now = SystemClock.elapsedRealtime()
-        if (now - lastHudBeaconWakeAtMs < HUD_BEACON_WAKE_DEBOUNCE_MS) {
-            ensureStarted(cleanContext)
-            return true
+        val duplicate = now - lastHudBeaconWakeAtMs < HUD_BEACON_WAKE_DEBOUNCE_MS
+        if (!duplicate) {
+            lastHudBeaconWakeAtMs = now
         }
-        lastHudBeaconWakeAtMs = now
-        val started = BridgeForegroundService.startSession(cleanContext, "HUD BLE beacon")
+        val started = BridgeForegroundService.startSession(
+            cleanContext,
+            if (duplicate) "HUD BLE beacon refresh" else "HUD BLE beacon",
+        )
         BridgeDiagnostics.record(
             cleanContext,
-            if (started) "HUD beacon posted session start" else "HUD beacon session start failed",
+            if (started) {
+                if (duplicate) "HUD beacon refreshed session start" else "HUD beacon posted session start"
+            } else {
+                "HUD beacon session start failed"
+            },
         )
         ensureStarted(cleanContext)
         return started

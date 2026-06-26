@@ -19,7 +19,7 @@ import java.util.UUID
 
 object BleWakeAdvertiser {
     private const val TAG = "TaskerBridge-BLE"
-    private const val BEACON_TIMEOUT_MS = 10_000L
+    private const val BEACON_TIMEOUT_MS = 20_000L
 
     private val main = Handler(Looper.getMainLooper())
     private val beaconUuid = UUID.fromString(Protocol.BLE_HUD_BEACON_SERVICE_UUID)
@@ -30,6 +30,9 @@ object BleWakeAdvertiser {
     @Volatile
     private var activeCallback: AdvertiseCallback? = null
 
+    @Volatile
+    private var advertisingStarted = false
+
     private var timeoutRunnable: Runnable? = null
 
     fun pulse(
@@ -37,8 +40,13 @@ object BleWakeAdvertiser {
         onStatus: (String) -> Unit = {},
     ) {
         main.post {
-            stopActive()
             val appContext = context.applicationContext
+            if (activeContext != null && activeCallback != null && advertisingStarted) {
+                scheduleStop()
+                onStatus("HUD wake beacon active")
+                return@post
+            }
+            stopActive()
             if (!hasAdvertisePermission(appContext)) {
                 val message = "HUD wake beacon permission missing"
                 Log.w(TAG, message)
@@ -55,12 +63,14 @@ object BleWakeAdvertiser {
             }
             val callback = object : AdvertiseCallback() {
                 override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                    advertisingStarted = true
                     val message = "HUD wake beacon sent"
                     Log.i(TAG, message)
                     onStatus(message)
                 }
 
                 override fun onStartFailure(errorCode: Int) {
+                    advertisingStarted = false
                     val message = "HUD wake beacon failed: $errorCode"
                     Log.w(TAG, message)
                     onStatus(message)
@@ -94,6 +104,7 @@ object BleWakeAdvertiser {
     }
 
     private fun scheduleStop() {
+        timeoutRunnable?.let(main::removeCallbacks)
         val runnable = Runnable { stopActive() }
         timeoutRunnable = runnable
         main.postDelayed(runnable, BEACON_TIMEOUT_MS)
@@ -117,6 +128,7 @@ object BleWakeAdvertiser {
         }
         activeContext = null
         activeCallback = null
+        advertisingStarted = false
     }
 
     private fun hasAdvertisePermission(context: Context): Boolean =

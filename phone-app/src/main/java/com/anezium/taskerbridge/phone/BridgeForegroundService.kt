@@ -351,7 +351,7 @@ class BridgeForegroundService : Service() {
 
         private fun postRuntimeArmFallback(context: Context) {
             val appContext = context.applicationContext
-            fallbackHandler.post {
+            runFallbackOnMain {
                 val runtime = BridgeRuntime.get(appContext)
                 runtime.start()
                 runtime.startBackground()
@@ -363,7 +363,7 @@ class BridgeForegroundService : Service() {
         private fun postRuntimeSessionFallback(context: Context, reason: String) {
             val appContext = context.applicationContext
             val generation = nextRuntimeFallbackGeneration()
-            fallbackHandler.post {
+            runFallbackOnMain {
                 val runtime = BridgeRuntime.get(appContext)
                 runtime.start()
                 runtime.markServiceActive(true)
@@ -405,6 +405,14 @@ class BridgeForegroundService : Service() {
                 runtimeFallbackGeneration += 1L
                 runtimeFallbackGeneration
             }
+
+        private inline fun runFallbackOnMain(crossinline block: () -> Unit) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                block()
+            } else {
+                fallbackHandler.post { block() }
+            }
+        }
     }
 }
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.9-preview.33 - 2026-06-26
+
+### Preview Fix
+
+- Keep the glasses HUD wake beacon active for a longer visible-HUD window and extend it on retries instead of stopping/restarting BLE advertising every time the helper asks for a phone wake.
+- Treat repeated HUD beacon scan callbacks on the phone as session refreshes instead of dropping them during the debounce window, so Android gets multiple chances to open the HUD task session after deep idle.
+- Run the phone runtime fallback immediately when Android refuses or delays the foreground-service start, instead of posting the fallback behind the broadcast/service handoff.
+- Preserve the no-idle-drain model: the stronger beacon only exists while the Tasker Bridge HUD is visible/retrying, and it is still cancelled by the HUD close/onStop path.
+
+### Upgrade Notes
+
+- Install the new phone APK.
+- Bundled helper is now `0.2.6-preview.19`; tap **Install HUD** / reinstall on the glasses after installing the phone APK.
+- Tap **Arm wake bridge** once after install, then run the same several-hours idle test from the glasses.
+
 ## v0.2.9-preview.32 - 2026-06-26
 
 ### Preview Fix
