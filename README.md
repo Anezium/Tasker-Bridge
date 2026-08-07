@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Deprecated — superseded by the [Tasker plugin](https://github.com/Anezium/Rokid-Nexus/tree/main/plugins/tasker) for [Rokid Nexus](https://github.com/Anezium/Rokid-Nexus).** The plugin does the same job over the Nexus bus — no BLE wake bridge, no RFCOMM link, no helper APK to install on the glasses — and installs in one tap from the Nexus Store. This app is no longer maintained and will not receive updates.
+
 # Tasker Bridge
 
 <p align="center">
